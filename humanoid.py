@@ -28,7 +28,15 @@ def generate_sign_basic(path, timestamp):
         hashlib.sha256
     ).hexdigest()
 
+# def generate_sign_full(path, timestamp):
+#     base_string = f"{PARTNER_ID}{path}{timestamp}{ACCESS_TOKEN}{SHOP_ID}"
+#     return hmac.new(
+#         PARTNER_KEY.encode(),
+#         base_string.encode(),
+#         hashlib.sha256
+#     ).hexdigest()
 def generate_sign_full(path, timestamp):
+    # Urutan: PartnerID + Path + Timestamp + AccessToken + ShopID
     base_string = f"{PARTNER_ID}{path}{timestamp}{ACCESS_TOKEN}{SHOP_ID}"
     return hmac.new(
         PARTNER_KEY.encode(),
@@ -182,18 +190,39 @@ with tab3:
                 st.json(detail)
 
                 # ===== FLATTEN KE DATAFRAME =====
+                # rows = []
+                # for o in detail.get("response", {}).get("order_list", []):
+                #     rows.append({
+                #         "order_sn": o.get("order_sn"),
+                #         "status": o.get("order_status"),
+                #         "buyer": o.get("buyer_username"),
+                #         "total_amount": o.get("total_amount"),
+                #         "currency": o.get("currency"),
+                #         "create_time": o.get("create_time"),
+                #         "pay_time": o.get("pay_time")
+                #     })
+
+                # df = pd.DataFrame(rows)
                 rows = []
                 for o in detail.get("response", {}).get("order_list", []):
-                    rows.append({
-                        "order_sn": o.get("order_sn"),
-                        "status": o.get("order_status"),
-                        "buyer": o.get("buyer_username"),
-                        "total_amount": o.get("total_amount"),
-                        "currency": o.get("currency"),
-                        "create_time": o.get("create_time"),
-                        "pay_time": o.get("pay_time")
-                    })
-
+                    # API Shopee memberikan list barang di dalam satu order_sn
+                    for item in o.get("item_list", []):
+                        rows.append({
+                            "No. Pesanan": o.get("order_sn"),
+                            "Status Pesanan": o.get("order_status"),
+                            "Username (Pembeli)": o.get("buyer_username"),
+                            "Waktu Pesanan Dibuat": pd.to_datetime(o.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S'),
+                            "Opsi Pengiriman": o.get("shipping_carrier"),
+                            "Nama Produk": item.get("item_name"),
+                            "Nama Variasi": item.get("model_name"), # PENTING: Untuk extract_eksemplar
+                            "Harga Asli": item.get("model_original_price"),
+                            "Jumlah": item.get("model_quantity_purchased"),
+                            "Total Pembayaran": o.get("total_amount"),
+                            "Catatan dari Pembeli": o.get("message"),
+                            "SKU Induk": item.get("item_sku"),
+                            "Nomor Pelacakan": o.get("tracking_number")
+                        })
+                
                 df = pd.DataFrame(rows)
 
                 st.subheader("Order-all (DataFrame)")
