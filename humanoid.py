@@ -73,11 +73,11 @@ def get_shop_token(shop_name):
         return None
     return res.data[0]
 
-def save_report_to_db(shop_name, date_range, csv_string):
+def save_report_to_db(shop_name, date_range, excel_bytes):
     data = {
         "shop_name": shop_name,
         "date_range": date_range,
-        "csv_content": csv_string,
+        "excel_content": excel_bytes,
         "created_at": "now()"
     }
     supabase.table("shopee_reports").insert(data).execute()
@@ -339,9 +339,9 @@ with tab3:
                     esc = get_escrow_detail(order_sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     income_info = esc.get("order_income_info", {})
                     addr = o.get("recipient_address", {})
-                    weight = item.get("weight", 0)
                     
                     for item in o.get("item_list", []):
+                        weight = item.get("weight", 0)
                         rows.append({
                             "No. Pesanan": order_sn,
                             "Status Pesanan": o.get("order_status"),
@@ -397,9 +397,14 @@ with tab3:
                 progress_bar.progress(progress)
 
             df = pd.DataFrame(rows)
-            csv_data = df.to_csv(index=False)
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                df.to_excel(writer, index=False, sheet_name="Order-All")
+            
+            excel_bytes = output.getvalue()
+            
             range_str = f"{start_date} s/d {end_date}"
-            save_report_to_db(selected_shop, range_str, csv_data)
+            save_report_to_db(selected_shop, range_str, excel_bytes)
             st.info("Laporan telah disimpan ke riwayat database.")
             st.success(f"Berhasil menarik {len(df)} data produk dari {len(all_order_sns)} pesanan.")
             
@@ -407,10 +412,10 @@ with tab3:
             st.dataframe(df, use_container_width=True)
 
             st.download_button(
-                "⬇️ Download Order-all CSV",
-                df.to_csv(index=False),
-                "order_all.csv",
-                "text/csv"
+                "⬇️ Download Order-all Excel",
+                excel_bytes,
+                "order_all.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
         st.divider()
@@ -424,10 +429,10 @@ with tab3:
                 col1.write(f"📅 {item['date_range']}")
                 col2.write(f"⏰ {item['created_at'][:19]}")
                 col3.download_button(
-                    label="💾 Download CSV",
-                    data=item['csv_content'],
-                    file_name=f"Order_{selected_shop}_{item['created_at'][:10]}.csv",
-                    mime="text/csv",
+                    label="💾 Download Excel",
+                    data=item['excel_content'],
+                    file_name=f"Order_{selected_shop}_{item['created_at'][:10]}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=item['id']
                 )
 
@@ -544,6 +549,14 @@ with tab4:
                 df_prc = pd.DataFrame(processing_rows)
                 
                 excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc)
+
+                range_inc_str = f"{start_inc} s/d {end_inc}"
+
+                save_report_to_db(
+                    selected_shop_inc,
+                    f"INCOME {range_inc_str}",
+                    excel_file
+                )
                 
                 st.success("✅ Laporan Income Berhasil Dibuat!")
                 st.download_button(
@@ -552,3 +565,26 @@ with tab4:
                     file_name=f"Income_{selected_shop_inc}_{start_inc}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
+            st.divider()
+            st.subheader("📜 Riwayat Laporan Income (Database)")
+            
+            history_inc = get_report_history(selected_shop_inc)
+            
+            if not history_inc:
+                st.write("Belum ada riwayat laporan income.")
+            else:
+                for item in history_inc:
+                    if not item["date_range"].startswith("INCOME"):
+                        continue  # Skip yg bukan income
+            
+                    col1, col2, col3 = st.columns([3, 3, 2])
+                    col1.write(f"📅 {item['date_range']}")
+                    col2.write(f"⏰ {item['created_at'][:19]}")
+                    col3.download_button(
+                        label="💾 Download Excel",
+                        data=item["excel_content"],
+                        file_name=f"Income_{selected_shop_inc}_{item['created_at'][:10]}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"inc_{item['id']}"
+                    )
