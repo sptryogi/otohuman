@@ -166,11 +166,13 @@ def create_income_excel(df_income, df_service, df_processing, shop_name):
 # ===============================
 st.title("🤖 Humanoid - Shopee API Integration")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "1️⃣ Authorisasi",
     "2️⃣ Tukar Code → Token",
     "3️⃣ Order-all & Detail",
-    "4️⃣ Income (Dana Dilepas)"
+    "4️⃣ Income (Dana Dilepas)",
+    "5️⃣ Data Iklan Keseluruhan",
+    "6️⃣ Seller Conversion"
 ])
 
 # ===============================
@@ -588,3 +590,329 @@ with tab4:
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"inc_{item['id']}"
                     )
+
+with tab5:
+    st.header("📢 Data Iklan Keseluruhan")
+    st.info("Mengambil data performa iklan Shopee Ads dalam periode tertentu.")
+
+    if not shop_names:
+        st.warning("Belum ada toko.")
+    else:
+        selected_shop_ads = st.selectbox("Pilih Toko untuk Iklan", shop_names, key="shop_ads")
+
+        col_ad1, col_ad2 = st.columns(2)
+        with col_ad1:
+            start_ads = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=7), key="s_ads")
+        with col_ad2:
+            end_ads = st.date_input("Sampai Tanggal", datetime.date.today(), key="e_ads")
+
+        if st.button("📊 Tarik Data Iklan"):
+            token_row = get_shop_token(selected_shop_ads)
+            ACTIVE_SHOP_ID = token_row["shop_id"]
+            ACTIVE_ACCESS_TOKEN = token_row["access_token"]
+
+            time_from = int(time.mktime(start_ads.timetuple()))
+            time_to = int(time.mktime(end_ads.timetuple())) + 86399
+
+            # ===============================
+            # SHOPEE ADS PERFORMANCE API
+            # ===============================
+            path_ads = "/api/v2/ads/get_product_performance"
+            ts_ads = int(time.time())
+            sign_ads = generate_sign_full(path_ads, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+
+            params_ads = {
+                "partner_id": PARTNER_ID,
+                "timestamp": ts_ads,
+                "access_token": ACTIVE_ACCESS_TOKEN,
+                "shop_id": int(ACTIVE_SHOP_ID),
+                "sign": sign_ads,
+                "time_from": time_from,
+                "time_to": time_to,
+                "page_size": 50
+            }
+
+            res_ads = requests.get(BASE_URL + path_ads, params=params_ads).json()
+            ads_list = res_ads.get("response", {}).get("performance_list", [])
+
+            if not ads_list:
+                st.warning("Tidak ada data iklan di periode ini.")
+            else:
+                ads_rows = []
+                for idx, ad in enumerate(ads_list, start=1):
+                    impressions = ad.get("impression", 0)
+                    clicks = ad.get("click", 0)
+                    cost = ad.get("cost", 0)
+                    orders = ad.get("order", 0)
+                    gmv = ad.get("gmv", 0)
+
+                    ctr = (clicks / impressions * 100) if impressions else 0
+                    cvr = (orders / clicks * 100) if clicks else 0
+                    cpa = (cost / orders) if orders else 0
+                    acos = (cost / gmv * 100) if gmv else 0
+
+                    ads_rows.append({
+                        "Urutan": idx,
+                        "Nama Iklan": ad.get("item_name"),
+                        "Status": ad.get("status"),
+                        "Jenis Iklan": ad.get("ads_type"),
+                        "Kode Produk": ad.get("item_id"),
+                        "Tampilan Iklan": impressions,
+                        "Mode Bidding": ad.get("bidding_strategy"),
+                        "Penempatan Iklan": ad.get("placement"),
+                        "Tanggal Mulai": start_ads,
+                        "Tanggal Selesai": end_ads,
+                        "Dilihat": impressions,
+                        "Jumlah Klik": clicks,
+                        "Persentase Klik": round(ctr, 2),
+                        "Konversi": orders,
+                        "Konversi Langsung": 0,
+                        "Tingkat konversi": round(cvr, 2),
+                        "Tingkat Konversi Langsung": 0,
+                        "Biaya per Konversi": round(cpa, 2),
+                        "Biaya per Konversi Langsung": 0,
+                        "Produk Terjual": orders,
+                        "Terjual Langsung": 0,
+                        "Omzet Penjualan": gmv,
+                        "Penjualan Langsung (GMV Langsung)": 0,
+                        "Biaya": cost,
+                        "Efektifitas Iklan": gmv - cost,
+                        "Efektivitas Langsung": 0,
+                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": round(acos, 2),
+                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": 0,
+                        "Jumlah Produk Dilihat": impressions,
+                        "Jumlah Klik Produk": clicks,
+                        "Persentase Klik Produk": round(ctr, 2)
+                    })
+
+                df_ads = pd.DataFrame(ads_rows)
+
+                # ===============================
+                # SIMPAN EXCEL
+                # ===============================
+                output_ads = io.BytesIO()
+                with pd.ExcelWriter(output_ads, engine="xlsxwriter") as writer:
+                    df_ads.to_excel(writer, index=False, sheet_name="Data Iklan")
+
+                excel_ads_bytes = output_ads.getvalue()
+                range_ads_str = f"{start_ads} s/d {end_ads}"
+
+                save_report_to_db(
+                    selected_shop_ads,
+                    f"ADS {range_ads_str}",
+                    excel_ads_bytes
+                )
+
+                st.success("✅ Data Iklan berhasil diambil & disimpan ke database.")
+                st.dataframe(df_ads, use_container_width=True)
+
+                st.download_button(
+                    "⬇️ Download Data Iklan (Excel)",
+                    excel_ads_bytes,
+                    f"Ads_{selected_shop_ads}_{start_ads}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+        # ===============================
+        # RIWAYAT IKLAN
+        # ===============================
+        st.divider()
+        st.subheader("📜 Riwayat Laporan Iklan (Database)")
+
+        history_ads = get_report_history(selected_shop_ads)
+
+        if not history_ads:
+            st.write("Belum ada riwayat laporan iklan.")
+        else:
+            for item in history_ads:
+                if not item["date_range"].startswith("ADS"):
+                    continue
+
+                col1, col2, col3 = st.columns([3, 3, 2])
+                col1.write(f"📅 {item['date_range']}")
+                col2.write(f"⏰ {item['created_at'][:19]}")
+                col3.download_button(
+                    label="💾 Download Excel",
+                    data=item["excel_content"],
+                    file_name=f"Ads_{selected_shop_ads}_{item['created_at'][:10]}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"ads_{item['id']}"
+                )
+
+with tab6:
+    st.header("🔁 Seller Conversion")
+    st.info("Menarik data seller conversion / affiliate conversion dalam periode tertentu.")
+
+    if not shop_names:
+        st.warning("Belum ada toko.")
+    else:
+        selected_shop_conv = st.selectbox("Pilih Toko untuk Conversion", shop_names, key="shop_conv")
+
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            start_conv = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=7), key="s_conv")
+        with col_c2:
+            end_conv = st.date_input("Sampai Tanggal", datetime.date.today(), key="e_conv")
+
+        if st.button("📊 Tarik Seller Conversion"):
+            token_row = get_shop_token(selected_shop_conv)
+            ACTIVE_SHOP_ID = token_row["shop_id"]
+            ACTIVE_ACCESS_TOKEN = token_row["access_token"]
+
+            time_from = int(time.mktime(start_conv.timetuple()))
+            time_to = int(time.mktime(end_conv.timetuple())) + 86399
+
+            # ============================================
+            # BASE: Ambil Order (Sebagai Fallback Conversion)
+            # ============================================
+            path_list = "/api/v2/order/get_order_list"
+            ts_list = int(time.time())
+            sign_list = generate_sign_full(path_list, ts_list, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+
+            p_list = {
+                "partner_id": PARTNER_ID,
+                "timestamp": ts_list,
+                "access_token": ACTIVE_ACCESS_TOKEN,
+                "shop_id": int(ACTIVE_SHOP_ID),
+                "sign": sign_list,
+                "time_range_field": "create_time",
+                "time_from": time_from,
+                "time_to": time_to,
+                "page_size": 50
+            }
+
+            res_list = requests.get(BASE_URL + path_list, params=p_list).json()
+            order_sns = [o["order_sn"] for o in res_list.get("response", {}).get("order_list", [])]
+
+            if not order_sns:
+                st.warning("Tidak ada data conversion di periode ini.")
+            else:
+                conv_rows = []
+                prog_conv = st.progress(0)
+                status_conv = st.empty()
+
+                for idx, sn in enumerate(order_sns, start=1):
+                    status_conv.info(f"Memproses Conversion Order: {sn}")
+                    time.sleep(0.3)
+
+                    # Ambil detail order
+                    path_dtl = "/api/v2/order/get_order_detail"
+                    ts_dtl = int(time.time())
+                    sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+
+                    p_dtl = {
+                        "partner_id": PARTNER_ID,
+                        "timestamp": ts_dtl,
+                        "access_token": ACTIVE_ACCESS_TOKEN,
+                        "shop_id": int(ACTIVE_SHOP_ID),
+                        "sign": sign_dtl,
+                        "order_sn_list": sn,
+                        "response_optional_fields": "item_list,order_status,create_time,finish_time"
+                    }
+
+                    ord = requests.get(BASE_URL + path_dtl, params=p_dtl).json().get("response", {}).get("order_list", [{}])[0]
+
+                    for item in ord.get("item_list", []):
+                        conv_rows.append({
+                            "Kode Pesanan": sn,
+                            "Status Pesanan": ord.get("order_status"),
+                            "Status Terverifikasi": "Verified" if ord.get("order_status") == "COMPLETED" else "Pending",
+                            "Waktu Pesanan": pd.to_datetime(ord.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord.get("create_time") else "",
+                            "Waktu Pesanan Selesai": pd.to_datetime(ord.get("finish_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord.get("finish_time") else "",
+                            "Waktu Pesanan Terverifikasi": pd.to_datetime(ord.get("finish_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord.get("finish_time") else "",
+                            "Kode Produk": item.get("item_id"),
+                            "Nama Produk": item.get("item_name"),
+                            "ID Model": item.get("model_id"),
+
+                            # Kategori (tidak tersedia di Order API → placeholder)
+                            "L1 Kategori Global": "",
+                            "L2 Kategori Global": "",
+                            "L3 Kategori Global": "",
+
+                            # Promo & Affiliate (tidak tersedia → placeholder)
+                            "Kode Promo": "",
+                            "Harga(Rp)": item.get("model_discounted_price"),
+                            "Jumlah": item.get("model_quantity_purchased"),
+                            "Nama Affiliate": "",
+                            "Username Affiliate": "",
+                            "MCN Terhubung": "",
+
+                            # Commission (placeholder sampai Affiliate API aktif)
+                            "ID Komisi Pesanan": "",
+                            "Partner Promo": "",
+                            "Jenis Promo": "",
+                            "Nilai Pembelian(Rp)": item.get("model_discounted_price", 0) * item.get("model_quantity_purchased", 0),
+                            "Jumlah Pengembalian(Rp)": 0,
+                            "Tipe Pesanan": "Normal",
+                            "Estimasi Komisi per Produk(Rp)": 0,
+                            "Estimasi Komisi Affiliate per Produk(Rp)": 0,
+                            "Persentase Komisi Affiliate per Produk": 0,
+                            "Estimasi Komisi MCN per Produk(Rp)": 0,
+                            "Persentase Komisi MCN per Produk": 0,
+                            "Estimasi Komisi per Pesanan(Rp)": 0,
+                            "Estimasi Komisi Affiliate per Pesanan(Rp)": 0,
+                            "Estimasi Komisi MCN per Pesanan(Rp)": 0,
+                            "Catatan Produk": "",
+                            "Platform": "Shopee",
+                            "Pengeluaran(Rp)": 0,
+                            "Status Pemotongan": "",
+                            "Metode Pemotongan": "",
+                            "Waktu Pemotongan": ""
+                        })
+
+                    prog_conv.progress(idx / len(order_sns))
+
+                df_conv = pd.DataFrame(conv_rows)
+
+                # ===============================
+                # SIMPAN EXCEL
+                # ===============================
+                output_conv = io.BytesIO()
+                with pd.ExcelWriter(output_conv, engine="xlsxwriter") as writer:
+                    df_conv.to_excel(writer, index=False, sheet_name="Seller Conversion")
+
+                excel_conv_bytes = output_conv.getvalue()
+                range_conv_str = f"{start_conv} s/d {end_conv}"
+
+                save_report_to_db(
+                    selected_shop_conv,
+                    f"CONVERSION {range_conv_str}",
+                    excel_conv_bytes
+                )
+
+                st.success("✅ Seller Conversion berhasil dibuat & disimpan.")
+                st.dataframe(df_conv, use_container_width=True)
+
+                st.download_button(
+                    "⬇️ Download Seller Conversion (Excel)",
+                    excel_conv_bytes,
+                    f"Seller_Conversion_{selected_shop_conv}_{start_conv}.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+        # ===============================
+        # RIWAYAT CONVERSION
+        # ===============================
+        st.divider()
+        st.subheader("📜 Riwayat Seller Conversion (Database)")
+
+        history_conv = get_report_history(selected_shop_conv)
+
+        if not history_conv:
+            st.write("Belum ada riwayat seller conversion.")
+        else:
+            for item in history_conv:
+                if not item["date_range"].startswith("CONVERSION"):
+                    continue
+
+                col1, col2, col3 = st.columns([3, 3, 2])
+                col1.write(f"📅 {item['date_range']}")
+                col2.write(f"⏰ {item['created_at'][:19]}")
+                col3.download_button(
+                    label="💾 Download Excel",
+                    data=item["excel_content"],
+                    file_name=f"Seller_Conversion_{selected_shop_conv}_{item['created_at'][:10]}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"conv_{item['id']}"
+                )
+
