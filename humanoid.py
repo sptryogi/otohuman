@@ -5,6 +5,10 @@ import hashlib
 import urllib.parse
 import requests
 import pandas as pd
+from supabase import create_client, Client
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 st.set_page_config(page_title="Humanoid Shopee API", layout="wide")
 
@@ -43,6 +47,53 @@ def generate_sign_full(path, timestamp):
         base_string.encode(),
         hashlib.sha256
     ).hexdigest()
+
+# FUNGSI UNTUK SIMPAN/UPDATE TOKEN KE SUPABASE
+def save_token_to_db(shop_name, shop_id, access_token, refresh_token):
+    data = {
+        "shop_name": shop_name,
+        "shop_id": int(shop_id),
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "updated_at": "now()"
+    }
+    supabase.table("shopee_tokens").upsert(data).execute()
+
+# FUNGSI REFRESH TOKEN OTOMATIS (AGAR TIDAK LOGIN ULANG)
+def auto_refresh_token(shop_name):
+    # 1. Ambil data dari DB
+    res = supabase.table("shopee_tokens").select("*").eq("shop_name", shop_name).execute()
+    if not res.data:
+        return None, None
+    
+    token_data = res.data[0]
+    
+    # 2. Panggil API Refresh Shopee
+    path = "/api/v2/auth/access_token/get"
+    timestamp = int(time.time())
+    sign = generate_sign_basic(path, timestamp) # Pakai basic sign
+    
+    url = BASE_URL + path
+    payload = {
+        "partner_id": int(PARTNER_ID),
+        "shop_id": int(token_data['shop_id']),
+        "refresh_token": token_data['refresh_token'],
+        "timestamp": timestamp,
+        "sign": sign
+    }
+    
+    r = requests.post(url, json=payload).json()
+    
+    if "access_token" in r.get("response", {}):
+        new_at = r["response"]["access_token"]
+        new_rt = r["response"]["refresh_token"]
+        # 3. Simpan token baru ke DB
+        save_token_to_db(shop_name, token_data['shop_id'], new_at, new_rt)
+        return new_at, token_data['shop_id']
+    else:
+        st.error(f"Gagal Refresh Token: {r}")
+        return None, None
+        
 
 # ============ UI ============
 
@@ -117,11 +168,20 @@ with tab2:
         st.json(data)
 
         if "access_token" in data.get("response", {}):
+            shop_name_input = st.text_input("Beri Nama Toko ini (misal: Human)", "Human")
+            if st.button("💾 Simpan ke Database"):
+                save_token_to_db(
+                    shop_name_input, 
+                    shop_id_input, 
+                    data["response"]["access_token"], 
+                    data["response"]["refresh_token"]
+                )
+                st.success(f"Token Toko {shop_name_input} tersimpan permanen!")
             st.success("Simpan ini ke Streamlit Secrets:")
             st.code(f'''
-SHOP_ID = "{shop_id_input}"
-ACCESS_TOKEN = "{data["response"]["access_token"]}"
-''')
+            SHOP_ID = "{shop_id_input}"
+            ACCESS_TOKEN = "{data["response"]["access_token"]}"
+            ''')
 
 # ===============================
 # TAB 3 — ORDER-ALL & DETAIL
