@@ -166,7 +166,7 @@ def create_income_excel(df_income, df_service, df_processing, shop_name):
 # ===============================
 st.title("🤖 Humanoid - Shopee API Integration")
 
-tab1, tab2, tab3 = st.tabs([
+tab1, tab2, tab3, tab4 = st.tabs([
     "1️⃣ Authorisasi",
     "2️⃣ Tukar Code → Token",
     "3️⃣ Order-all & Detail",
