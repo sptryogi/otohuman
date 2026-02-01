@@ -246,7 +246,9 @@ with tab2:
             "shop_id": int(shop_id_input)
         }
 
-        data = requests.post(url, json=payload).json()
+        #data = requests.post(url, json=payload).json()
+        data = requests.post(url, params=payload).json()
+
 
         st.subheader("Response Token")
         st.json(data)
