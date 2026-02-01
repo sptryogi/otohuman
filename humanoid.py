@@ -259,14 +259,18 @@ with tab2:
         st.subheader("Response Token")
         st.json(data)
 
-        if "access_token" in data.get("response", {}):
+        if "access_token" in data:
             save_token_to_db(
                 shop_name_input,
                 shop_id_input,
-                data["response"]["access_token"],
-                data["response"]["refresh_token"]
+                data["access_token"],
+                data["refresh_token"]
             )
             st.success(f"Token toko '{shop_name_input}' berhasil disimpan!")
+            # Tambahkan st.rerun() agar Tab 3 langsung update
+            st.rerun()
+        else:
+            st.error("Gagal mendapatkan access_token. Cek kembali respons di atas.")
 
 # ===============================
 # TAB 3 — ORDER-ALL & DETAIL
