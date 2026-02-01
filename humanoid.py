@@ -1,4 +1,5 @@
 import streamlit as st
+import base64
 import time
 import hmac
 import hashlib
@@ -81,11 +82,12 @@ def get_shop_token(shop_name):
         return None
     return res.data[0]
 
-def save_report_to_db(shop_name, date_range, excel_bytes):
+def save_report_to_db(shop_name, date_range, excel_content):
+    excel_base64 = base64.b64encode(excel_content).decode('utf-8')
     data = {
         "shop_name": shop_name,
         "date_range": date_range,
-        "excel_content": excel_bytes,
+        "excel_content": excel_base64,
         "created_at": "now()"
     }
     supabase.table("shopee_reports").insert(data).execute()
@@ -459,9 +461,10 @@ with tab3:
                 col1, col2, col3 = st.columns([3, 3, 2])
                 col1.write(f"📅 {item['date_range']}")
                 col2.write(f"⏰ {item['created_at'][:19]}")
+                report_bytes = base64.b64decode(item['excel_content'])
                 col3.download_button(
                     label="💾 Download Excel",
-                    data=item['excel_content'],
+                    data=report_bytes,
                     file_name=f"Order_{selected_shop}_{item['created_at'][:10]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=item['id']
