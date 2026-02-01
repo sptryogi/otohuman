@@ -238,17 +238,23 @@ with tab2:
         sign = generate_sign_basic(path, timestamp)
 
         url = BASE_URL + path
-        payload = {
+        
+        # 1. Parameter untuk URL (Common Parameters)
+        params = {
             "partner_id": int(PARTNER_ID),
             "timestamp": timestamp,
-            "sign": sign,
+            "sign": sign
+        }
+        
+        # 2. Parameter untuk Body (JSON Payload)
+        payload = {
             "code": code,
-            "shop_id": int(shop_id_input)
+            "shop_id": int(shop_id_input),
+            "partner_id": int(PARTNER_ID)
         }
 
-        #data = requests.post(url, json=payload).json()
-        data = requests.post(url, params=payload).json()
-
+        # Kirim dengan memisahkan params (URL) dan json (Body)
+        data = requests.post(url, params=params, json=payload).json()
 
         st.subheader("Response Token")
         st.json(data)
