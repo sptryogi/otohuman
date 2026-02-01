@@ -32,6 +32,14 @@ REDIRECT_URL = st.secrets.get("REDIRECT_URL", "")
 BASE_URL = "https://partner.shopeemobile.com"
 
 # ===============================
+# CAPTURE REDIRECT PARAMS (OAUTH)
+# ===============================
+query_params = st.experimental_get_query_params()
+
+oauth_code = query_params.get("code", [None])[0]
+oauth_shop_id = query_params.get("shop_id", [None])[0]
+
+# ===============================
 # SIGNATURE HELPERS
 # ===============================
 def generate_sign_basic(path, timestamp):
@@ -211,8 +219,17 @@ with tab1:
 with tab2:
     st.header("Tukar Code ke Access Token")
 
-    code = st.text_input("Masukkan code dari redirect")
-    shop_id_input = st.text_input("Masukkan shop_id dari redirect")
+    #code = st.text_input("Masukkan code dari redirect")
+    #shop_id_input = st.text_input("Masukkan shop_id dari redirect")
+    code = st.text_input(
+        "Masukkan code dari redirect",
+        value=oauth_code if oauth_code else ""
+    )
+
+    shop_id_input = st.text_input(
+        "Masukkan shop_id dari redirect",
+        value=oauth_shop_id if oauth_shop_id else ""
+    )
     shop_name_input = st.text_input("Beri Nama Toko (misal: Human)", "Human")
 
     if st.button("🔄 Tukar ke Access Token"):
