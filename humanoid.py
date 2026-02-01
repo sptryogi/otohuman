@@ -437,7 +437,7 @@ with tab3:
             excel_bytes = output.getvalue()
             
             range_str = f"{start_date} s/d {end_date}"
-            save_report_to_db(selected_shop, range_str, excel_bytes)
+            save_report_to_db(selected_shop, range_str, excel_content)
             st.info("Laporan telah disimpan ke riwayat database.")
             st.success(f"Berhasil menarik {len(df)} data produk dari {len(all_order_sns)} pesanan.")
             
