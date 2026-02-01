@@ -82,15 +82,19 @@ def get_shop_token(shop_name):
         return None
     return res.data[0]
 
-def save_report_to_db(shop_name, date_range, excel_content):
-    excel_base64 = base64.b64encode(excel_content).decode('utf-8')
+def save_report_to_db(shop_name, date_range, excel_bytes):
+    excel_base64 = base64.b64encode(excel_bytes).decode('utf-8')
     data = {
         "shop_name": shop_name,
         "date_range": date_range,
-        "excel_content": excel_base64,
+        "csv_content": excel_base64,
         "created_at": "now()"
     }
-    supabase.table("shopee_reports").insert(data).execute()
+    try:
+        supabase.table("shopee_reports").insert(data).execute()
+    except Exception as e:
+        st.error(f"Gagal simpan ke Database: {e}")
+        raise e
 
 def get_report_history(shop_name):
     res = supabase.table("shopee_reports").select("*").eq("shop_name", shop_name).order("created_at", desc=True).limit(10).execute()
@@ -461,7 +465,7 @@ with tab3:
                 col1, col2, col3 = st.columns([3, 3, 2])
                 col1.write(f"📅 {item['date_range']}")
                 col2.write(f"⏰ {item['created_at'][:19]}")
-                report_bytes = base64.b64decode(item['excel_content'])
+                report_bytes = base64.b64decode(item['csv_content'])
                 col3.download_button(
                     label="💾 Download Excel",
                     data=report_bytes,
