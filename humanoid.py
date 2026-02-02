@@ -650,9 +650,6 @@ with tab5:
             time_from = int(time.mktime(start_ads.timetuple()))
             time_to = int(time.mktime(end_ads.timetuple())) + 86399
 
-            time_from_str = start_ads.strftime("%Y-%m-%d")
-            time_to_str = end_ads.strftime("%Y-%m-%d")
-
             # ===============================
             # SHOPEE ADS PERFORMANCE API
             # ===============================
@@ -661,19 +658,18 @@ with tab5:
             sign_ads = generate_sign_full(path_ads, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
             params_ads = {
-                "partner_id": int(PARTNER_ID), # Pastikan integer
+                "partner_id": int(PARTNER_ID),
                 "timestamp": ts_ads,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_ads,
-                
-                # ⬇️ PERBAIKAN DISINI
-                "ads_type": "keyword",      # Gunakan "keyword" atau "discovery"
-                "view_by": "product",       # Tetap "product" untuk performa per SKU
-                "time_granularity": "ALL",  # Gunakan "ALL" jika ingin total per produk di periode tsb
-                "time_from": time_from_str,
-                "time_to": time_to_str,
-                "offset": 0,                # Tambahkan offset
+            
+                "ads_type": "all",
+                "view_by": "product",
+                "time_granularity": "DAY",
+                "time_from": time_from,
+                "time_to": time_to,
+                "offset": 0,
                 "page_size": 50
             }
 
