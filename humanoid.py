@@ -650,6 +650,9 @@ with tab5:
             time_from = int(time.mktime(start_ads.timetuple()))
             time_to = int(time.mktime(end_ads.timetuple())) + 86399
 
+            time_from_str = start_ads.strftime("%Y-%m-%d")
+            time_to_str = end_ads.strftime("%Y-%m-%d")
+
             # ===============================
             # SHOPEE ADS PERFORMANCE API
             # ===============================
@@ -679,8 +682,8 @@ with tab5:
                 "view_by": "product",
                 "time_granularity": "DAY",
             
-                "time_from": time_from,
-                "time_to": time_to,
+                "time_from": time_from_str,
+                "time_to": time_to_str,
                 "page_size": 50
             }
 
