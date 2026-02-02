@@ -719,7 +719,7 @@ with tab5:
             campaign_map = {}
 
             for c in campaign_list:
-                campaign_map[c.get("campaign_id")] = {
+                campaign_map[c.get("ads_id")] = {
                     "nama_iklan": c.get("campaign_name"),
                     "status": "Berjalan" if c.get("status") == "ONGOING" else c.get("status"),
                     "bidding": c.get("bidding_strategy", "GMV Max Auto"),
@@ -734,7 +734,7 @@ with tab5:
             else:
                 ads_rows = []
                 for idx, p in enumerate(perf_list, start=1):
-                    camp = campaign_map.get(p.get("campaign_id"), {})
+                    camp = campaign_map.get(p.get("ads_id"), {})
                 
                     impressions = p.get("impression", 0)
                     clicks = p.get("click", 0)
