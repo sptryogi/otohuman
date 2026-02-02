@@ -653,7 +653,7 @@ with tab5:
             # ===============================
             # SHOPEE ADS PERFORMANCE API
             # ===============================
-            path_ads = "/api/v2/ads/get_gms_item_performance"
+            path_ads = "/api/v2/ads/get_item_performance"
             ts_ads = int(time.time())
             sign_ads = generate_sign_full(path_ads, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
@@ -674,7 +674,7 @@ with tab5:
             }
 
             res_ads = requests.get(BASE_URL + path_ads, params=params_ads).json()
-            ads_list = res_ads.get("response", {}).get("gms_item_performance_list", [])
+            ads_list = res_ads.get("response", {}).get("performance_list", [])
 
             # ⬇️ TAMBAHKAN INI UNTUK CEK ERROR ASLI
             if "error" in res_ads and res_ads["error"] != "":
