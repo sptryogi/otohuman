@@ -669,7 +669,21 @@ with tab5:
             }
             
             res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
-            perf_list = res_perf.get("response", {}).get("list", [])
+            # DEBUG KALO ERROR
+            if "error" in res_perf and res_perf["error"]:
+                st.error(f"Shopee Ads Error: {res_perf.get('message','Unknown')}")
+                st.write(res_perf)
+                st.stop()
+            
+            response_perf = res_perf.get("response")
+            
+            # NORMALISASI RESPONSE
+            if isinstance(response_perf, dict):
+                perf_list = response_perf.get("list", [])
+            elif isinstance(response_perf, list):
+                perf_list = response_perf
+            else:
+                perf_list = []
 
 
             # ===============================
