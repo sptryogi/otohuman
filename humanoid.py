@@ -673,19 +673,23 @@ with tab5:
             }
             
             res_id = requests.get(BASE_URL + path_id, params=params_id).json()
+
+            response_id = res_id.get("response")
+
+            # NORMALISASI campaign_id_list
+            if isinstance(response_id, str):
+                campaign_ids = response_id.split(",")
             
-            if res_id.get("error"):
-                st.error(res_id.get("message"))
-                st.write(res_id)
-                st.stop()
+            elif isinstance(response_id, list):
+                campaign_ids = [str(x) for x in response_id]
             
-            campaign_ids = [
-                str(c["campaign_id"])
-                for c in res_id.get("response", [])
-            ]
+            else:
+                campaign_ids = []
+            
+            campaign_ids = [cid.strip() for cid in campaign_ids if cid.strip()]
             
             if not campaign_ids:
-                st.warning("Tidak ada Product Campaign.")
+                st.warning("Tidak ada Product Campaign ID.")
                 st.stop()
             
             
