@@ -652,34 +652,82 @@ with tab5:
             time_to = int(time.mktime(end_ads.timetuple())) + 86399
 
 
-            # ===============================
-            # CAMPAIGN PERFORMANCE (UNTUK NAMA IKLAN)
-            # ===============================
-            path_campaign = "/api/v2/ads/get_product_campaign_daily_performance"
-            ts_camp = int(time.time())
-            sign_camp = generate_sign_full(path_campaign, ts_camp, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+            # ======================================
+            # 1. AMBIL LIST CAMPAIGN ID (WAJIB)
+            # ======================================
+            path_list = "/api/v2/ads/get_product_campaign_list"
+            ts_list = int(time.time())
+            sign_list = generate_sign_full(
+                path_list,
+                ts_list,
+                ACTIVE_ACCESS_TOKEN,
+                ACTIVE_SHOP_ID
+            )
             
-            params_camp = {
+            params_list = {
                 "partner_id": int(PARTNER_ID),
-                "timestamp": ts_camp,
+                "timestamp": ts_list,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_camp,
-                "start_date": start_ads.strftime("%d-%m-%Y"),
-                "end_date": end_ads.strftime("%d-%m-%Y")
+                "sign": sign_list,
+                "page_no": 1,
+                "page_size": 100
             }
             
-            res_camp = requests.get(BASE_URL + path_campaign, params=params_camp).json()
+            res_list = requests.get(BASE_URL + path_list, params=params_list).json()
             
-            if res_camp.get("error"):
-                st.error(f"Shopee Ads Error: {res_camp.get('message')}")
-                st.write(res_camp)
+            if res_list.get("error"):
+                st.error(res_list.get("message"))
+                st.write(res_list)
                 st.stop()
-                
-            rows = []
+            
+            campaign_list_raw = res_list.get("response", {}).get("campaign_list", [])
+            
+            if not campaign_list_raw:
+                st.warning("Tidak ada campaign iklan.")
+                st.stop()
+            
+            campaign_ids = [str(c["campaign_id"]) for c in campaign_list_raw]
+            
+            
+            # ======================================
+            # 2. PRODUCT CAMPAIGN DAILY PERFORMANCE
+            # ======================================
+            path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
+            ts_perf = int(time.time())
+            sign_perf = generate_sign_full(
+                path_perf,
+                ts_perf,
+                ACTIVE_ACCESS_TOKEN,
+                ACTIVE_SHOP_ID
+            )
+            
+            params_perf = {
+                "partner_id": int(PARTNER_ID),
+                "timestamp": ts_perf,
+                "access_token": ACTIVE_ACCESS_TOKEN,
+                "shop_id": int(ACTIVE_SHOP_ID),
+                "sign": sign_perf,
+                "start_date": start_ads.strftime("%d-%m-%Y"),
+                "end_date": end_ads.strftime("%d-%m-%Y"),
+                "campaign_id_list": ",".join(campaign_ids)
+            }
+            
+            res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
+            
+            if res_perf.get("error"):
+                st.error(res_perf.get("message"))
+                st.write(res_perf)
+                st.stop()
+            
+            
+            # ======================================
+            # 3. NORMALISASI & BUILD ROWS
+            # ======================================
+            ads_rows = []
             idx = 1
             
-            for shop in res_camp.get("response", []):
+            for shop in res_perf.get("response", []):
                 for camp in shop.get("campaign_list", []):
                     for m in camp.get("metrics_list", []):
             
@@ -696,9 +744,9 @@ with tab5:
                         acos = (cost / gmv * 100) if gmv else 0
                         roas = (gmv / cost) if cost else 0
             
-                        rows.append({
+                        ads_rows.append({
                             "Urutan": idx,
-                            "Nama Iklan": camp.get("ad_name"),
+                            "Nama Iklan": camp.get("ad_name", "UNKNOWN"),
                             "Status": "Berjalan",
                             "Jenis Iklan": "Iklan Produk",
                             "Kode Produk": camp.get("campaign_id"),
@@ -716,24 +764,24 @@ with tab5:
                             "Konversi": orders,
                             "Konversi Langsung": m.get("direct_order", 0),
             
-                            "Tingkat konversi": f"{round(cvr,2)}%",
+                            "Tingkat Konversi": f"{round(cvr,2)}%",
                             "Tingkat Konversi Langsung": f"{round(m.get('direct_cr',0),2)}%",
             
                             "Biaya per Konversi": round(cpa,2),
                             "Biaya per Konversi Langsung": round(m.get("cpdc",0),2),
             
                             "Produk Terjual": item_sold,
-                            "Terjual Langsung": m.get("direct_order_amount",0),
+                            "Terjual Langsung": m.get("direct_order_amount", 0),
             
                             "Omzet Penjualan": gmv,
-                            "Penjualan Langsung (GMV Langsung)": m.get("direct_gmv",0),
+                            "Penjualan Langsung (GMV Langsung)": m.get("direct_gmv", 0),
             
                             "Biaya": cost,
-                            "Efektifitas Iklan": round(roas,2),
+                            "Efektivitas Iklan": round(roas,2),
                             "Efektivitas Langsung": round(m.get("direct_roi",0),2),
             
-                            "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos,2)}%",
-                            "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round(m.get('direct_cir',0),2)}%",
+                            "ACOS": f"{round(acos,2)}%",
+                            "ACOS Langsung": f"{round(m.get('direct_cir',0),2)}%",
             
                             "Jumlah Produk Dilihat": impressions,
                             "Jumlah Klik Produk": clicks,
@@ -741,7 +789,8 @@ with tab5:
                         })
             
                         idx += 1
-                df_ads = pd.DataFrame(rows)
+            
+            df_ads = pd.DataFrame(ads_rows)
 
                 # ===============================
                 # SIMPAN EXCEL
