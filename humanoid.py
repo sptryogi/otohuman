@@ -652,12 +652,14 @@ with tab5:
             time_from = int(time.mktime(start_ads.timetuple()))
             time_to = int(time.mktime(end_ads.timetuple())) + 86399
 
-            # Format tanggal sesuai dokumentasi Ads: DD-MM-YYYY
+            # Format tanggal wajib DD-MM-YYYY
             start_str = start_ads.strftime("%d-%m-%Y")
             end_str = end_ads.strftime("%d-%m-%Y")
             ts_now = int(time.time())
 
+            # ---------------------------------------------------------
             # 1. AMBIL LIST CAMPAIGN ID
+            # ---------------------------------------------------------
             path_id = "/api/v2/ads/get_product_level_campaign_id_list"
             sign_id = generate_sign_full(path_id, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             res_id = requests.get(BASE_URL + path_id, params={
@@ -665,15 +667,20 @@ with tab5:
                 "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_id
             }).json()
             
-            campaign_list = res_id.get("response", {}).get("campaign_list", [])
+            # Gunakan 'or {}' agar tidak AttributeError jika response null
+            resp_id_data = res_id.get("response") or {}
+            campaign_list = resp_id_data.get("campaign_list") or []
+
             if not campaign_list:
-                st.warning("Tidak ada data iklan ditemukan.")
+                st.warning("⚠️ Tidak ada data kampanye atau response API kosong.")
                 st.stop()
 
-            # Ambil semua campaign_id (maksimal 20 untuk stabilitas)
+            # Ambil 20 ID pertama untuk menghindari limit Shopee
             ids_to_query = [str(c["campaign_id"]) for c in campaign_list[:20]]
 
-            # 2. AMBIL SETTING INFO (Untuk Nama, Status, Mode Bidding)
+            # ---------------------------------------------------------
+            # 2. AMBIL SETTING INFO (Nama, Status, Bidding)
+            # ---------------------------------------------------------
             path_info = "/api/v2/ads/get_product_level_campaign_setting_info"
             sign_info = generate_sign_full(path_info, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             res_info = requests.get(BASE_URL + path_info, params={
@@ -681,9 +688,13 @@ with tab5:
                 "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_info, "campaign_id_list": ",".join(ids_to_query)
             }).json()
             
-            settings_map = {str(s["campaign_id"]): s for s in res_info.get("response", {}).get("campaign_list", [])}
+            resp_info_data = res_info.get("response") or {}
+            settings_list = resp_info_data.get("campaign_list") or []
+            settings_map = {str(s["campaign_id"]): s for s in settings_list}
 
-            # 3. AMBIL PERFORMANCE DATA (Data Angka)
+            # ---------------------------------------------------------
+            # 3. AMBIL PERFORMANCE DATA (Angka Performa)
+            # ---------------------------------------------------------
             path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
             sign_perf = generate_sign_full(path_perf, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             res_perf = requests.get(BASE_URL + path_perf, params={
@@ -692,34 +703,38 @@ with tab5:
                 "campaign_id_list": ",".join(ids_to_query)
             }).json()
 
-            perf_data = res_perf.get("response", {}).get("campaign_list", [])
+            resp_perf_data = res_perf.get("response") or {}
+            perf_list = resp_perf_data.get("campaign_list") or []
 
+            # ---------------------------------------------------------
+            # 4. PROSES DATA KE TABEL
+            # ---------------------------------------------------------
             ads_rows = []
-            for camp in perf_data:
+            for camp in perf_list:
                 c_id = str(camp.get("campaign_id"))
                 setting = settings_map.get(c_id, {})
-                metrics = camp.get("metrics_list", [])
+                metrics = camp.get("metrics_list") or []
 
-                # Agregat data dari list harian
-                # PERBAIKAN: Menggunakan keys yang benar (clicks, expense, broad_order, dll)
+                # Agregat data harian (Jumlahkan semua tanggal)
+                # Field sesuai dokumentasi: impression, clicks, expense, broad_gmv, dll.
                 t_imp = sum(m.get("impression", 0) for m in metrics)
                 t_clk = sum(m.get("clicks", 0) for m in metrics)
-                t_cost = sum(m.get("expense", 0) for m in metrics) 
-                t_gmv = sum(m.get("broad_gmv", 0) for m in metrics)
-                t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics)
+                t_cost = sum(m.get("expense", 0) for m in metrics) / 100000 # Konversi Micro
+                t_gmv = sum(m.get("broad_gmv", 0) for m in metrics) / 100000
+                t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics) / 100000
                 t_ord = sum(m.get("broad_order", 0) for m in metrics)
                 t_ord_dir = sum(m.get("direct_order", 0) for m in metrics)
                 t_sold = sum(m.get("broad_item_sold", 0) for m in metrics)
                 t_sold_dir = sum(m.get("direct_item_sold", 0) for m in metrics)
 
-                # Rumus & Format (ACOS, CTR, ROAS)
+                # Hitung Rasio
                 ctr = (t_clk / t_imp * 100) if t_imp else 0
                 cvr = (t_ord / t_clk * 100) if t_clk else 0
                 cvr_dir = (t_ord_dir / t_clk * 100) if t_clk else 0
-                roas = (t_gmv / t_cost) if t_cost else 0
-                roas_dir = (t_gmv_dir / t_cost) if t_cost else 0
                 acos = (t_cost / t_gmv * 100) if t_gmv else 0
                 acos_dir = (t_cost / t_gmv_dir * 100) if t_gmv_dir else 0
+                roas = (t_gmv / t_cost) if t_cost else 0
+                roas_dir = (t_gmv_dir / t_cost) if t_cost else 0
                 cpa = (t_cost / t_ord) if t_ord else 0
                 cpa_dir = (t_cost / t_ord_dir) if t_ord_dir else 0
 
