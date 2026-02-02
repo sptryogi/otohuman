@@ -621,7 +621,7 @@ with tab4:
                     col2.write(f"⏰ {item['created_at'][:19]}")
                     col3.download_button(
                         label="💾 Download Excel",
-                        data=item["excel_content"],
+                        data=item["csv_content"],
                         file_name=f"Income_{selected_shop_inc}_{item['created_at'][:10]}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"inc_{item['id']}"
@@ -769,7 +769,7 @@ with tab5:
                 col2.write(f"⏰ {item['created_at'][:19]}")
                 col3.download_button(
                     label="💾 Download Excel",
-                    data=item["excel_content"],
+                    data=item["csv_content"],
                     file_name=f"Ads_{selected_shop_ads}_{item['created_at'][:10]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"ads_{item['id']}"
@@ -946,7 +946,7 @@ with tab6:
                 col2.write(f"⏰ {item['created_at'][:19]}")
                 col3.download_button(
                     label="💾 Download Excel",
-                    data=item["excel_content"],
+                    data=item["csv_content"],
                     file_name=f"Seller_Conversion_{selected_shop_conv}_{item['created_at'][:10]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"conv_{item['id']}"
