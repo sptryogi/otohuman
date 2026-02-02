@@ -790,7 +790,7 @@ with tab5:
             
                         idx += 1
             
-            df_ads = pd.DataFrame(ads_rows)
+                df_ads = pd.DataFrame(ads_rows)
 
                 # ===============================
                 # SIMPAN EXCEL
