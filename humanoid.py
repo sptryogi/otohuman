@@ -664,8 +664,10 @@ with tab5:
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_perf,
-                "time_from": time_from,
-                "time_to": time_to
+                # "start_date": time_from,
+                # "end_date": time_to
+                "start_date": start_ads.strftime("%Y-%m-%d"),
+                "end_date": end_ads.strftime("%Y-%m-%d")
             }
             
             res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
