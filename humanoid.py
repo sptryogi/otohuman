@@ -996,99 +996,87 @@ with tab6:
 
 with tab7:
     st.header("🕒 Performa Iklan Per Jam")
-    st.info("Melihat grafik dan data performa iklan seluruh toko berdasarkan jam (00:00 - 23:00).")
+    st.info("Data performa iklan seluruh toko berdasarkan jam (00:00 - 23:00).")
 
     if not shop_names:
         st.warning("Belum ada toko.")
     else:
-        selected_shop_hourly = st.selectbox("Pilih Toko", shop_names, key="shop_hourly")
-        
-        # Pilih satu tanggal saja karena datanya per jam dalam satu hari
-        target_date = st.date_input("Pilih Tanggal", datetime.date.today(), key="date_hourly")
+        selected_shop_hourly = st.selectbox("Pilih Toko", shop_names, key="shop_hourly_v2")
+        target_date = st.date_input("Pilih Tanggal", datetime.date.today(), key="date_hourly_v2")
 
         if st.button("🚀 Tarik Data Per Jam"):
             token_row = get_shop_token(selected_shop_hourly)
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
 
-            # Shopee API Ads menggunakan format YYYY-MM-DD
-            date_str = target_date.strftime("%Y-%m-%d")
+            # PERBAIKAN 1: Format tanggal harus DD-MM-YYYY sesuai dokumentasi
+            date_str = target_date.strftime("%d-%m-%Y")
             ts_ads = int(time.time())
 
-            # ===============================
-            # CALL API HOURLY PERFORMANCE
-            # ===============================
             path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
             sign_hourly = generate_sign_full(path_hourly, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
+            # PERBAIKAN 2: Nama parameter adalah 'performance_date'
             params_hourly = {
                 "partner_id": int(PARTNER_ID),
                 "timestamp": ts_ads,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_hourly,
-                "target_date": date_str
+                "performance_date": date_str  
             }
 
             res_hourly = requests.get(BASE_URL + path_hourly, params=params_hourly).json()
 
-            if res_hourly.get("error"):
-                st.error(f"Error dari Shopee: {res_hourly.get('message', 'Tidak diketahui')}")
-                st.json(res_hourly)
+            if "error" in res_hourly and res_hourly["error"] != "":
+                st.error(f"Error dari Shopee: {res_hourly.get('message')}")
+                st.write(res_hourly)
             else:
-                # Ambil list data per jam dari response
-                resp_data = res_hourly.get("response", {})
-                hourly_list = resp_data.get("hourly_performance_list", [])
+                # PERBAIKAN 3: Response langsung berupa list sesuai contoh JSON kamu
+                hourly_list = res_hourly.get("response") or []
 
-                # Inisialisasi data 24 jam (00:00 sampai 23:00) agar barisnya lengkap
-                # Kita buat dictionary dulu agar mudah diisi
-                hourly_data_map = {f"{str(h).zfill(2)}:00": {"Lihat": 0, "Klik": 0, "Biaya": 0} for h in range(24)}
+                if not hourly_list:
+                    st.warning(f"Tidak ada data iklan untuk tanggal {date_str}.")
+                else:
+                    # Buat template 24 jam agar urut
+                    hourly_data_map = {f"{str(h).zfill(2)}:00": {"Lihat": 0, "Klik": 0, "Biaya": 0} for h in range(24)}
 
-                # Masukkan data dari API ke map (jika ada)
-                for data in hourly_list:
-                    # Shopee biasanya kirim hour dalam angka 0-23
-                    hour_num = data.get("hour")
-                    if hour_num is not None:
-                        hour_key = f"{str(hour_num).zfill(2)}:00"
-                        if hour_key in hourly_data_map:
-                            hourly_data_map[hour_key]["Lihat"] = data.get("impression", 0)
-                            hourly_data_map[hour_key]["Klik"] = data.get("click", 0)
-                            # Opsional: Tambah biaya jika perlu (dibagi 100.000 untuk konv micro)
-                            hourly_data_map[hour_key]["Biaya"] = data.get("cost", 0) / 100000
+                    for data in hourly_list:
+                        h_num = data.get("hour")
+                        if h_num is not None:
+                            key = f"{str(h_num).zfill(2)}:00"
+                            if key in hourly_data_map:
+                                # PERBAIKAN 4: Nama field sesuai dokumentasi (impression, clicks, expense)
+                                hourly_data_map[key]["Lihat"] = data.get("impression", 0)
+                                hourly_data_map[key]["Klik"] = data.get("clicks", 0)
+                                hourly_data_map[key]["Biaya"] = data.get("expense", 0)
 
-                # Ubah ke format List untuk DataFrame
-                rows_hourly = []
-                for jam, val in hourly_data_map.items():
-                    rows_hourly.append({
-                        "Jam": jam,
-                        "Lihat": val["Lihat"],
-                        "Klik": val["Klik"],
-                        "Biaya (Estimasi)": val["Biaya"]
-                    })
+                    # Susun baris untuk DataFrame & Excel
+                    rows_hourly = []
+                    for jam, val in hourly_data_map.items():
+                        rows_hourly.append({
+                            "Jam": jam,
+                            "Lihat": val["Lihat"],
+                            "Klik": val["Klik"],
+                            "Biaya": val["Biaya"]
+                        })
 
-                df_hourly = pd.DataFrame(rows_hourly)
+                    df_hourly = pd.DataFrame(rows_hourly)
 
-                # Tampilkan Grafik agar menarik
-                st.subheader(f"Grafik Performa - {date_str}")
-                st.line_chart(df_hourly.set_index("Jam")[["Lihat", "Klik"]])
+                    # Tampilkan di Streamlit
+                    st.subheader(f"Hasil Performa Jam: {date_str}")
+                    st.dataframe(df_hourly, use_container_width=True)
 
-                # Tampilkan Tabel
-                st.subheader("Detail Tabel")
-                st.dataframe(df_hourly, use_container_width=True)
-
-                # ===============================
-                # EXPORT KE EXCEL
-                # ===============================
-                output_h = io.BytesIO()
-                with pd.ExcelWriter(output_h, engine="xlsxwriter") as writer:
-                    df_hourly.to_excel(writer, index=False, sheet_name="Hourly_Ads")
-                
-                excel_bytes = output_h.getvalue()
-
-                st.download_button(
-                    label="💾 Download Excel Per Jam",
-                    data=excel_bytes,
-                    file_name=f"Hourly_Ads_{selected_shop_hourly}_{date_str}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                    # Export Excel
+                    output_h = io.BytesIO()
+                    with pd.ExcelWriter(output_h, engine="xlsxwriter") as writer:
+                        df_hourly.to_excel(writer, index=False, sheet_name="Hourly_Ads")
+                    
+                    excel_bytes = output_h.getvalue()
+                    st.download_button(
+                        label="💾 Download Excel Per Jam",
+                        data=excel_bytes,
+                        file_name=f"Ads_Hourly_{selected_shop_hourly}_{date_str}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
