@@ -676,16 +676,28 @@ with tab5:
             else:
                 ads_rows = []
                 for idx, ad in enumerate(ads_list, start=1):
+                    # Ambil metrik dasar (Broad)
                     impressions = ad.get("impression", 0)
                     clicks = ad.get("click", 0)
                     cost = ad.get("cost", 0)
                     orders = ad.get("order", 0)
                     gmv = ad.get("gmv", 0)
+                    
+                    # Ambil metrik LANGSUNG (Direct) dari Shopee
+                    direct_orders = ad.get("direct_order", 0)
+                    direct_gmv = ad.get("direct_gmv", 0)
+                    direct_item_sold = ad.get("direct_item_sold", 0)
 
+                    # Hitung Rasio (Broad)
                     ctr = (clicks / impressions * 100) if impressions else 0
                     cvr = (orders / clicks * 100) if clicks else 0
                     cpa = (cost / orders) if orders else 0
                     acos = (cost / gmv * 100) if gmv else 0
+
+                    # Hitung Rasio (Langsung)
+                    cvr_direct = (direct_orders / clicks * 100) if clicks else 0
+                    cpa_direct = (cost / direct_orders) if direct_orders else 0
+                    acos_direct = (cost / direct_gmv * 100) if direct_gmv else 0
 
                     ads_rows.append({
                         "Urutan": idx,
@@ -700,25 +712,25 @@ with tab5:
                         "Tanggal Selesai": end_ads,
                         "Dilihat": impressions,
                         "Jumlah Klik": clicks,
-                        "Persentase Klik": round(ctr, 2),
+                        "Persentase Klik": f"{round(ctr, 2)}%",
                         "Konversi": orders,
-                        "Konversi Langsung": 0,
-                        "Tingkat konversi": round(cvr, 2),
-                        "Tingkat Konversi Langsung": 0,
+                        "Konversi Langsung": direct_orders,
+                        "Tingkat konversi": f"{round(cvr, 2)}%",
+                        "Tingkat Konversi Langsung": f"{round(cvr_direct, 2)}%",
                         "Biaya per Konversi": round(cpa, 2),
-                        "Biaya per Konversi Langsung": 0,
-                        "Produk Terjual": orders,
-                        "Terjual Langsung": 0,
+                        "Biaya per Konversi Langsung": round(cpa_direct, 2),
+                        "Produk Terjual": ad.get("item_sold", 0),
+                        "Terjual Langsung": direct_item_sold,
                         "Omzet Penjualan": gmv,
-                        "Penjualan Langsung (GMV Langsung)": 0,
+                        "Penjualan Langsung (GMV Langsung)": direct_gmv,
                         "Biaya": cost,
-                        "Efektifitas Iklan": gmv - cost,
-                        "Efektivitas Langsung": 0,
-                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": round(acos, 2),
-                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": 0,
+                        "Efektifitas Iklan": round(gmv / cost, 2) if cost else 0, # Ini biasanya ROAS
+                        "Efektivitas Langsung": round(direct_gmv / cost, 2) if cost else 0,
+                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
+                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round(acos_direct, 2)}%",
                         "Jumlah Produk Dilihat": impressions,
                         "Jumlah Klik Produk": clicks,
-                        "Persentase Klik Produk": round(ctr, 2)
+                        "Persentase Klik Produk": f"{round(ctr, 2)}%"
                     })
 
                 df_ads = pd.DataFrame(ads_rows)
