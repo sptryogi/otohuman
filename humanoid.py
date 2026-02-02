@@ -663,11 +663,13 @@ with tab5:
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_ads,
-                "campaign_type": "PROMOTION",  # atau "SEARCH" / "DISCOVERY"
+                
+                # 🔥 URUTAN PARAMETER CRITIS - INI YANG BERUBAH:
+                "ads_type": "ITEM",           # Bukan "product" → "ITEM"
+                "campaign_type": "ALL",       # Bukan "PROMOTION" → "ALL" 
                 "report_type": "STATS",
+                "view_by": "ITEM",            # Bukan "product" → "ITEM"
                 "time_granularity": "DAY",
-                "ads_type": "product",
-                "view_by": "product", 
                 "time_from": time_from,
                 "time_to": time_to,
                 "page_size": 50,
