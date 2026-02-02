@@ -704,7 +704,15 @@ with tab5:
             }
             
             res_camp = requests.get(BASE_URL + path_campaign, params=params_camp).json()
-            campaign_list = res_camp.get("response", {}).get("list", [])
+            # campaign_list = res_camp.get("response", {}).get("list", [])
+            response_camp = res_camp.get("response")
+
+            if isinstance(response_camp, dict):
+                campaign_list = response_camp.get("list", [])
+            elif isinstance(response_camp, list):
+                campaign_list = response_camp
+            else:
+                campaign_list = []
 
             campaign_map = {}
 
