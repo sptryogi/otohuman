@@ -674,7 +674,7 @@ with tab5:
             }
 
             res_ads = requests.get(BASE_URL + path_ads, params=params_ads).json()
-            ads_list = res_ads.get("response", {}).get("performance_list", [])
+            ads_list = res_ads.get("response", {}).get("gms_item_performance_list", [])
 
             # ⬇️ TAMBAHKAN INI UNTUK CEK ERROR ASLI
             if "error" in res_ads and res_ads["error"] != "":
