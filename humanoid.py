@@ -653,45 +653,44 @@ with tab5:
 
 
             # ======================================
-            # 1. AMBIL LIST CAMPAIGN ID (WAJIB)
+            # GET PRODUCT LEVEL CAMPAIGN ID LIST
             # ======================================
-            path_list = "/api/v2/ads/get_product_campaign_list"
-            ts_list = int(time.time())
-            sign_list = generate_sign_full(
-                path_list,
-                ts_list,
+            path_id = "/api/v2/ads/get_product_level_campaign_id_list"
+            ts_id = int(time.time())
+            sign_id = generate_sign_full(
+                path_id,
+                ts_id,
                 ACTIVE_ACCESS_TOKEN,
                 ACTIVE_SHOP_ID
             )
             
-            params_list = {
+            params_id = {
                 "partner_id": int(PARTNER_ID),
-                "timestamp": ts_list,
+                "timestamp": ts_id,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_list,
-                "page_no": 1,
-                "page_size": 100
+                "sign": sign_id
             }
             
-            res_list = requests.get(BASE_URL + path_list, params=params_list).json()
+            res_id = requests.get(BASE_URL + path_id, params=params_id).json()
             
-            if res_list.get("error"):
-                st.error(res_list.get("message"))
-                st.write(res_list)
+            if res_id.get("error"):
+                st.error(res_id.get("message"))
+                st.write(res_id)
                 st.stop()
             
-            campaign_list_raw = res_list.get("response", {}).get("campaign_list", [])
+            campaign_ids = [
+                str(c["campaign_id"])
+                for c in res_id.get("response", [])
+            ]
             
-            if not campaign_list_raw:
-                st.warning("Tidak ada campaign iklan.")
+            if not campaign_ids:
+                st.warning("Tidak ada Product Campaign.")
                 st.stop()
-            
-            campaign_ids = [str(c["campaign_id"]) for c in campaign_list_raw]
             
             
             # ======================================
-            # 2. PRODUCT CAMPAIGN DAILY PERFORMANCE
+            # PRODUCT CAMPAIGN DAILY PERFORMANCE
             # ======================================
             path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
             ts_perf = int(time.time())
@@ -721,9 +720,6 @@ with tab5:
                 st.stop()
             
             
-            # ======================================
-            # 3. NORMALISASI & BUILD ROWS
-            # ======================================
             ads_rows = []
             idx = 1
             
@@ -731,16 +727,14 @@ with tab5:
                 for camp in shop.get("campaign_list", []):
                     for m in camp.get("metrics_list", []):
             
-                        impressions = m.get("impression", 0)
-                        clicks = m.get("clicks", 0)
+                        imp = m.get("impression", 0)
+                        clk = m.get("clicks", 0)
                         cost = m.get("expense", 0)
                         gmv = m.get("broad_gmv", 0)
-                        orders = m.get("broad_order", 0)
-                        item_sold = m.get("broad_order_amount", 0)
+                        order = m.get("broad_order", 0)
             
-                        ctr = (clicks / impressions * 100) if impressions else 0
-                        cvr = (orders / clicks * 100) if clicks else 0
-                        cpa = (cost / orders) if orders else 0
+                        ctr = (clk / imp * 100) if imp else 0
+                        cvr = (order / clk * 100) if clk else 0
                         acos = (cost / gmv * 100) if gmv else 0
                         roas = (gmv / cost) if cost else 0
             
@@ -751,41 +745,23 @@ with tab5:
                             "Jenis Iklan": "Iklan Produk",
                             "Kode Produk": camp.get("campaign_id"),
             
-                            "Tampilan Iklan": impressions,
-                            "Mode Bidding": camp.get("ad_type", "auto"),
-                            "Penempatan Iklan": camp.get("campaign_placement", "all"),
+                            "Tampilan Iklan": imp,
+                            "Mode Bidding": camp.get("ad_type"),
+                            "Penempatan Iklan": camp.get("campaign_placement"),
+            
                             "Tanggal Mulai": m.get("date"),
                             "Tanggal Selesai": m.get("date"),
             
-                            "Dilihat": impressions,
-                            "Jumlah Klik": clicks,
-                            "Persentase Klik": f"{round(ctr,2)}%",
-            
-                            "Konversi": orders,
+                            "Dilihat": imp,
+                            "Jumlah Klik": clk,
+                            "Persentase Klik": f"{ctr:.2f}%",
+                            "Konversi": order,
                             "Konversi Langsung": m.get("direct_order", 0),
-            
-                            "Tingkat Konversi": f"{round(cvr,2)}%",
-                            "Tingkat Konversi Langsung": f"{round(m.get('direct_cr',0),2)}%",
-            
-                            "Biaya per Konversi": round(cpa,2),
-                            "Biaya per Konversi Langsung": round(m.get("cpdc",0),2),
-            
-                            "Produk Terjual": item_sold,
-                            "Terjual Langsung": m.get("direct_order_amount", 0),
-            
-                            "Omzet Penjualan": gmv,
-                            "Penjualan Langsung (GMV Langsung)": m.get("direct_gmv", 0),
-            
+                            "Tingkat Konversi": f"{cvr:.2f}%",
+                            "ACOS": f"{acos:.2f}%",
+                            "Efektivitas Iklan": round(roas, 2),
                             "Biaya": cost,
-                            "Efektivitas Iklan": round(roas,2),
-                            "Efektivitas Langsung": round(m.get("direct_roi",0),2),
-            
-                            "ACOS": f"{round(acos,2)}%",
-                            "ACOS Langsung": f"{round(m.get('direct_cir',0),2)}%",
-            
-                            "Jumlah Produk Dilihat": impressions,
-                            "Jumlah Klik Produk": clicks,
-                            "Persentase Klik Produk": f"{round(ctr,2)}%"
+                            "Omzet Penjualan": gmv
                         })
             
                         idx += 1
