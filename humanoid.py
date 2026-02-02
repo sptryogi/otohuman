@@ -705,75 +705,84 @@ with tab5:
                 st.error(f"Error: {res_perf.get('message')}")
                 st.stop()
 
+            # Ambil objek response-nya dulu
+            response_data = res_perf.get("response", {})
+            
+            # Shopee API ini biasanya mengembalikan dictionary yang berisi 'campaign_list'
+            # Kita langsung ambil list campaign-nya
+            campaign_result_list = response_data.get("campaign_list", []) if isinstance(response_data, dict) else []
+
             ads_rows = []
-            # Response struktur: list of shop -> list of campaign -> metrics_list
-            for shop_item in res_perf.get("response", []):
-                for camp in shop_item.get("campaign_list", []):
-                    # Kita agregat data jika ada beberapa hari (Daily Performance)
-                    metrics = camp.get("metrics_list", [])
-                    
-                    # Inisialisasi variabel total
-                    t_imp = sum(m.get("impression", 0) for m in metrics)
-                    t_clk = sum(m.get("clicks", 0) for m in metrics)
-                    t_cost = sum(m.get("expense", 0) for m in metrics) # Biasanya dalam micro
-                    t_gmv = sum(m.get("broad_gmv", 0) for m in metrics)
-                    t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics)
-                    t_ord = sum(m.get("broad_order", 0) for m in metrics)
-                    t_ord_dir = sum(m.get("direct_order", 0) for m in metrics)
-                    t_sold = sum(m.get("broad_item_sold", 0) for m in metrics)
-                    t_sold_dir = sum(m.get("direct_item_sold", 0) for m in metrics)
+            idx = 1
+            
+            for camp in campaign_result_list:
+                # Kita agregat data jika ada beberapa hari (Daily Performance)
+                metrics = camp.get("metrics_list", [])
+                
+                if not metrics:
+                    continue
 
-                    # Kalkulasi Rasio
-                    ctr = (t_clk / t_imp * 100) if t_imp else 0
-                    cvr = (t_ord / t_clk * 100) if t_clk else 0
-                    cvr_dir = (t_ord_dir / t_clk * 100) if t_clk else 0
-                    
-                    # ACOS & ROAS (Cost & GMV harus dibagi 100.000 untuk tampilan IDR)
-                    real_cost = t_cost # Jika sudah IDR, biarkan. Jika micro, bagi 100000
-                    real_gmv = t_gmv
-                    real_gmv_dir = t_gmv_dir
-                    
-                    acos = (real_cost / real_gmv * 100) if real_gmv else 0
-                    acos_dir = (real_cost / real_gmv_dir * 100) if real_gmv_dir else 0
-                    roas = (real_gmv / real_cost) if real_cost else 0
-                    roas_dir = (real_gmv_dir / real_cost) if real_cost else 0
-                    
-                    cpa = (real_cost / t_ord) if t_ord else 0
-                    cpa_dir = (real_cost / t_ord_dir) if t_ord_dir else 0
+                # Inisialisasi variabel total (sama seperti sebelumnya)
+                t_imp = sum(m.get("impression", 0) for m in metrics)
+                t_clk = sum(m.get("clicks", 0) for m in metrics)
+                t_cost = sum(m.get("expense", 0) for m in metrics)
+                t_gmv = sum(m.get("broad_gmv", 0) for m in metrics)
+                t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics)
+                t_ord = sum(m.get("broad_order", 0) for m in metrics)
+                t_ord_dir = sum(m.get("direct_order", 0) for m in metrics)
+                t_sold = sum(m.get("broad_item_sold", 0) for m in metrics)
+                t_sold_dir = sum(m.get("direct_item_sold", 0) for m in metrics)
 
-                    ads_rows.append({
-                        "Urutan": len(ads_rows) + 1,
-                        "Nama Iklan": camp.get("ad_name", "N/A"),
-                        "Status": "Berjalan",
-                        "Jenis Iklan": "Iklan Produk",
-                        "Kode Produk": camp.get("campaign_id"),
-                        "Tampilan Iklan": t_imp,
-                        "Mode Bidding": camp.get("ad_type", "Manual"),
-                        "Penempatan Iklan": "Semua Penempatan",
-                        "Tanggal Mulai": f"{start_str} 00:00:00",
-                        "Tanggal Selesai": "Tidak Terbatas",
-                        "Dilihat": t_imp,
-                        "Jumlah Klik": t_clk,
-                        "Persentase Klik": f"{ctr:.2f}%",
-                        "Konversi": t_ord,
-                        "Konversi Langsung": t_ord_dir,
-                        "Tingkat konversi": f"{cvr:.2f}%",
-                        "Tingkat Konversi Langsung": f"{cvr_dir:.2f}%",
-                        "Biaya per Konversi": round(cpa, 2),
-                        "Biaya per Konversi Langsung": round(cpa_dir, 2),
-                        "Produk Terjual": t_sold,
-                        "Terjual Langsung": t_sold_dir,
-                        "Omzet Penjualan": round(real_gmv, 2),
-                        "Penjualan Langsung (GMV Langsung)": round(real_gmv_dir, 2),
-                        "Biaya": round(real_cost, 2),
-                        "Efektifitas Iklan": round(roas, 2),
-                        "Efektivitas Langsung": round(roas_dir, 2),
-                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{acos:.2f}%",
-                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{acos_dir:.2f}%",
-                        "Jumlah Produk Dilihat": "-",
-                        "Jumlah Klik Produk": "-",
-                        "Persentase Klik Produk": "-"
-                    })
+                # Kalkulasi Rasio & Konversi Mata Uang (Micro ke IDR)
+                # Shopee micro: bagi 100.000
+                real_cost = t_cost / 100000 
+                real_gmv = t_gmv / 100000
+                real_gmv_dir = t_gmv_dir / 100000
+                
+                ctr = (t_clk / t_imp * 100) if t_imp else 0
+                cvr = (t_ord / t_clk * 100) if t_clk else 0
+                cvr_dir = (t_ord_dir / t_clk * 100) if t_clk else 0
+                acos = (real_cost / real_gmv * 100) if real_gmv else 0
+                acos_dir = (real_cost / real_gmv_dir * 100) if real_gmv_dir else 0
+                roas = (real_gmv / real_cost) if real_cost else 0
+                roas_dir = (real_gmv_dir / real_cost) if real_cost else 0
+                cpa = (real_cost / t_ord) if t_ord else 0
+                cpa_dir = (real_cost / t_ord_dir) if t_ord_dir else 0
+
+                ads_rows.append({
+                    "Urutan": idx,
+                    "Nama Iklan": camp.get("ad_name", "N/A"),
+                    "Status": "Berjalan",
+                    "Jenis Iklan": "Iklan Produk",
+                    "Kode Produk": camp.get("campaign_id"),
+                    "Tampilan Iklan": t_imp,
+                    "Mode Bidding": camp.get("ad_type", "Manual"),
+                    "Penempatan Iklan": "Semua Penempatan",
+                    "Tanggal Mulai": f"{start_str} 00:00:00",
+                    "Tanggal Selesai": "Tidak Terbatas",
+                    "Dilihat": t_imp,
+                    "Jumlah Klik": t_clk,
+                    "Persentase Klik": f"{ctr:.2f}%",
+                    "Konversi": t_ord,
+                    "Konversi Langsung": t_ord_dir,
+                    "Tingkat konversi": f"{cvr:.2f}%",
+                    "Tingkat Konversi Langsung": f"{cvr_dir:.2f}%",
+                    "Biaya per Konversi": round(cpa, 2),
+                    "Biaya per Konversi Langsung": round(cpa_dir, 2),
+                    "Produk Terjual": t_sold,
+                    "Terjual Langsung": t_sold_dir,
+                    "Omzet Penjualan": round(real_gmv, 2),
+                    "Penjualan Langsung (GMV Langsung)": round(real_gmv_dir, 2),
+                    "Biaya": round(real_cost, 2),
+                    "Efektifitas Iklan": round(roas, 2),
+                    "Efektivitas Langsung": round(roas_dir, 2),
+                    "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{acos:.2f}%",
+                    "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{acos_dir:.2f}%",
+                    "Jumlah Produk Dilihat": "-",
+                    "Jumlah Klik Produk": "-",
+                    "Persentase Klik Produk": "-"
+                })
+                idx += 1
 
                 df_ads = pd.DataFrame(ads_rows)
 
