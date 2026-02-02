@@ -650,13 +650,10 @@ with tab5:
             time_from = int(time.mktime(start_ads.timetuple()))
             time_to = int(time.mktime(end_ads.timetuple())) + 86399
 
-            time_from_str = start_ads.strftime("%d-%m-%Y")
-            time_to_str = end_ads.strftime("%d-%m-%Y")
-
             # ===============================
             # SHOPEE ADS PERFORMANCE API
             # ===============================
-            path_ads = "/api/v2/ads/get_product_performance"
+            path_ads = "/api/v2/ads/get_gms_item_performance"
             ts_ads = int(time.time())
             sign_ads = generate_sign_full(path_ads, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
@@ -670,8 +667,8 @@ with tab5:
                 "ads_type": "keyword",
                 "view_by": "product",
                 "time_granularity": "ALL",
-                "time_from": time_from_str,
-                "time_to": time_to_str,
+                "time_from": time_from,
+                "time_to": time_to,
                 "offset": 0,
                 "page_size": 50
             }
