@@ -660,35 +660,30 @@ with tab5:
             ts_ads = int(time.time())
             sign_ads = generate_sign_full(path_ads, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
-            # params_ads = {
-            #     "partner_id": PARTNER_ID,
-            #     "timestamp": ts_ads,
-            #     "access_token": ACTIVE_ACCESS_TOKEN,
-            #     "shop_id": int(ACTIVE_SHOP_ID),
-            #     "sign": sign_ads,
-            #     "time_from": time_from,
-            #     "time_to": time_to,
-            #     "page_size": 50
-            # }
             params_ads = {
-                "partner_id": PARTNER_ID,
+                "partner_id": int(PARTNER_ID), # Pastikan integer
                 "timestamp": ts_ads,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_ads,
-            
-                # ⬇️ WAJIB
-                "ads_type": "product",
-                "view_by": "product",
-                "time_granularity": "DAY",
-            
+                
+                # ⬇️ PERBAIKAN DISINI
+                "ads_type": "keyword",      # Gunakan "keyword" atau "discovery"
+                "view_by": "product",       # Tetap "product" untuk performa per SKU
+                "time_granularity": "ALL",  # Gunakan "ALL" jika ingin total per produk di periode tsb
                 "time_from": time_from_str,
                 "time_to": time_to_str,
+                "offset": 0,                # Tambahkan offset
                 "page_size": 50
             }
 
             res_ads = requests.get(BASE_URL + path_ads, params=params_ads).json()
             ads_list = res_ads.get("response", {}).get("performance_list", [])
+
+            # ⬇️ TAMBAHKAN INI UNTUK CEK ERROR ASLI
+            if "error" in res_ads and res_ads["error"] != "":
+                st.error(f"Error dari Shopee: {res_ads.get('message', 'Tidak diketahui')}")
+                st.write(res_ads) # Menampilkan detail error
 
             if not ads_list:
                 st.warning("Tidak ada data iklan di periode ini.")
@@ -706,6 +701,7 @@ with tab5:
                     direct_orders = ad.get("direct_order", 0)
                     direct_gmv = ad.get("direct_gmv", 0)
                     direct_item_sold = ad.get("direct_item_sold", 0)
+
 
                     # Hitung Rasio (Broad)
                     ctr = (clicks / impressions * 100) if impressions else 0
