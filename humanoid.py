@@ -180,13 +180,14 @@ def create_income_excel(df_income, df_service, df_processing, shop_name):
 # ===============================
 st.title("🤖 Humanoid - Shopee API Integration")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "1️⃣ Authorisasi",
     "2️⃣ Tukar Code → Token",
     "3️⃣ Order-all & Detail",
     "4️⃣ Income (Dana Dilepas)",
     "5️⃣ Data Iklan Keseluruhan",
     "6️⃣ Seller Conversion"
+    "🕒 Performa Iklan Per Jam"
 ])
 
 # ===============================
@@ -674,23 +675,15 @@ with tab5:
             
             res_id = requests.get(BASE_URL + path_id, params=params_id).json()
 
-            response_id = res_id.get("response")
+            response_id = res_id.get("response", {})
 
-            # NORMALISASI campaign_id_list
-            if isinstance(response_id, str):
-                campaign_ids = response_id.split(",")
+            campaign_list = response_id.get("campaign_list", [])
             
-            elif isinstance(response_id, list):
-                campaign_ids = [str(x) for x in response_id]
-            
-            else:
-                campaign_ids = []
-            
-            campaign_ids = [cid.strip() for cid in campaign_ids if cid.strip()]
-            
-            if not campaign_ids:
-                st.warning("Tidak ada Product Campaign ID.")
-                st.stop()
+            campaign_ids = [
+                str(c["campaign_id"])
+                for c in campaign_list
+                if "campaign_id" in c
+            ]
             
             
             # ======================================
@@ -999,5 +992,103 @@ with tab6:
                     file_name=f"Seller_Conversion_{selected_shop_conv}_{item['created_at'][:10]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     key=f"conv_{item['id']}"
+                )
+
+with tab7:
+    st.header("🕒 Performa Iklan Per Jam")
+    st.info("Melihat grafik dan data performa iklan seluruh toko berdasarkan jam (00:00 - 23:00).")
+
+    if not shop_names:
+        st.warning("Belum ada toko.")
+    else:
+        selected_shop_hourly = st.selectbox("Pilih Toko", shop_names, key="shop_hourly")
+        
+        # Pilih satu tanggal saja karena datanya per jam dalam satu hari
+        target_date = st.date_input("Pilih Tanggal", datetime.date.today(), key="date_hourly")
+
+        if st.button("🚀 Tarik Data Per Jam"):
+            token_row = get_shop_token(selected_shop_hourly)
+            ACTIVE_SHOP_ID = token_row["shop_id"]
+            ACTIVE_ACCESS_TOKEN = token_row["access_token"]
+
+            # Shopee API Ads menggunakan format YYYY-MM-DD
+            date_str = target_date.strftime("%Y-%m-%d")
+            ts_ads = int(time.time())
+
+            # ===============================
+            # CALL API HOURLY PERFORMANCE
+            # ===============================
+            path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
+            sign_hourly = generate_sign_full(path_hourly, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+
+            params_hourly = {
+                "partner_id": int(PARTNER_ID),
+                "timestamp": ts_ads,
+                "access_token": ACTIVE_ACCESS_TOKEN,
+                "shop_id": int(ACTIVE_SHOP_ID),
+                "sign": sign_hourly,
+                "target_date": date_str
+            }
+
+            res_hourly = requests.get(BASE_URL + path_hourly, params=params_hourly).json()
+
+            if res_hourly.get("error"):
+                st.error(f"Error dari Shopee: {res_hourly.get('message', 'Tidak diketahui')}")
+                st.json(res_hourly)
+            else:
+                # Ambil list data per jam dari response
+                resp_data = res_hourly.get("response", {})
+                hourly_list = resp_data.get("hourly_performance_list", [])
+
+                # Inisialisasi data 24 jam (00:00 sampai 23:00) agar barisnya lengkap
+                # Kita buat dictionary dulu agar mudah diisi
+                hourly_data_map = {f"{str(h).zfill(2)}:00": {"Lihat": 0, "Klik": 0, "Biaya": 0} for h in range(24)}
+
+                # Masukkan data dari API ke map (jika ada)
+                for data in hourly_list:
+                    # Shopee biasanya kirim hour dalam angka 0-23
+                    hour_num = data.get("hour")
+                    if hour_num is not None:
+                        hour_key = f"{str(hour_num).zfill(2)}:00"
+                        if hour_key in hourly_data_map:
+                            hourly_data_map[hour_key]["Lihat"] = data.get("impression", 0)
+                            hourly_data_map[hour_key]["Klik"] = data.get("click", 0)
+                            # Opsional: Tambah biaya jika perlu (dibagi 100.000 untuk konv micro)
+                            hourly_data_map[hour_key]["Biaya"] = data.get("cost", 0) / 100000
+
+                # Ubah ke format List untuk DataFrame
+                rows_hourly = []
+                for jam, val in hourly_data_map.items():
+                    rows_hourly.append({
+                        "Jam": jam,
+                        "Lihat": val["Lihat"],
+                        "Klik": val["Klik"],
+                        "Biaya (Estimasi)": val["Biaya"]
+                    })
+
+                df_hourly = pd.DataFrame(rows_hourly)
+
+                # Tampilkan Grafik agar menarik
+                st.subheader(f"Grafik Performa - {date_str}")
+                st.line_chart(df_hourly.set_index("Jam")[["Lihat", "Klik"]])
+
+                # Tampilkan Tabel
+                st.subheader("Detail Tabel")
+                st.dataframe(df_hourly, use_container_width=True)
+
+                # ===============================
+                # EXPORT KE EXCEL
+                # ===============================
+                output_h = io.BytesIO()
+                with pd.ExcelWriter(output_h, engine="xlsxwriter") as writer:
+                    df_hourly.to_excel(writer, index=False, sheet_name="Hourly_Ads")
+                
+                excel_bytes = output_h.getvalue()
+
+                st.download_button(
+                    label="💾 Download Excel Per Jam",
+                    data=excel_bytes,
+                    file_name=f"Hourly_Ads_{selected_shop_hourly}_{date_str}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
