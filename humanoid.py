@@ -665,7 +665,9 @@ with tab5:
                 "sign": sign_ads,
                 "campaign_type": "PROMOTION",  # atau "SEARCH" / "DISCOVERY"
                 "report_type": "STATS",
-                "time_granularity": "ALL",
+                "time_granularity": "DAY",
+                "ads_type": "product",
+                "view_by": "product", 
                 "time_from": time_from,
                 "time_to": time_to,
                 "page_size": 50,
