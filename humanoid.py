@@ -652,80 +652,59 @@ with tab5:
             time_from = int(time.mktime(start_ads.timetuple()))
             time_to = int(time.mktime(end_ads.timetuple())) + 86399
 
-            # Format tanggal sesuai dokumentasi Ads v2: DD-MM-YYYY
+            # Format tanggal sesuai dokumentasi Ads: DD-MM-YYYY
             start_str = start_ads.strftime("%d-%m-%Y")
             end_str = end_ads.strftime("%d-%m-%Y")
             ts_now = int(time.time())
 
-            # =========================================================
-            # STEP 1: Ambil List Campaign ID (get_product_level_campaign_id_list)
-            # =========================================================
+            # 1. AMBIL LIST CAMPAIGN ID
             path_id = "/api/v2/ads/get_product_level_campaign_id_list"
             sign_id = generate_sign_full(path_id, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+            res_id = requests.get(BASE_URL + path_id, params={
+                "partner_id": int(PARTNER_ID), "timestamp": ts_now,
+                "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_id
+            }).json()
             
-            params_id = {
-                "partner_id": int(PARTNER_ID),
-                "timestamp": ts_now,
-                "access_token": ACTIVE_ACCESS_TOKEN,
-                "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_id
-            }
-            
-            res_id = requests.get(BASE_URL + path_id, params=params_id).json()
-            campaign_data = res_id.get("response", {}).get("campaign_list", [])
-            
-            if not campaign_data:
-                st.warning("Tidak ditemukan kampanye iklan aktif.")
+            campaign_list = res_id.get("response", {}).get("campaign_list", [])
+            if not campaign_list:
+                st.warning("Tidak ada data iklan ditemukan.")
                 st.stop()
 
-            # Ambil semua ID untuk ditarik performanya
-            campaign_ids = [str(c["campaign_id"]) for c in campaign_data if "campaign_id" in c]
+            # Ambil semua campaign_id (maksimal 20 untuk stabilitas)
+            ids_to_query = [str(c["campaign_id"]) for c in campaign_list[:20]]
 
-            # =========================================================
-            # STEP 2: Ambil Performa (get_product_campaign_daily_performance)
-            # =========================================================
+            # 2. AMBIL SETTING INFO (Untuk Nama, Status, Mode Bidding)
+            path_info = "/api/v2/ads/get_product_level_campaign_setting_info"
+            sign_info = generate_sign_full(path_info, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+            res_info = requests.get(BASE_URL + path_info, params={
+                "partner_id": int(PARTNER_ID), "timestamp": ts_now, "access_token": ACTIVE_ACCESS_TOKEN,
+                "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_info, "campaign_id_list": ",".join(ids_to_query)
+            }).json()
+            
+            settings_map = {str(s["campaign_id"]): s for s in res_info.get("response", {}).get("campaign_list", [])}
+
+            # 3. AMBIL PERFORMANCE DATA (Data Angka)
             path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
             sign_perf = generate_sign_full(path_perf, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-            
-            # Kita tarik data per 20 ID (Shopee biasanya punya limit per request)
-            params_perf = {
-                "partner_id": int(PARTNER_ID),
-                "timestamp": ts_now,
-                "access_token": ACTIVE_ACCESS_TOKEN,
-                "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_perf,
-                "start_date": start_str,
-                "end_date": end_str,
-                "campaign_id_list": ",".join(campaign_ids[:20]) # Ambil 20 pertama agar aman
-            }
-            
-            res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
-            
-            if res_perf.get("error"):
-                st.error(f"Error: {res_perf.get('message')}")
-                st.stop()
+            res_perf = requests.get(BASE_URL + path_perf, params={
+                "partner_id": int(PARTNER_ID), "timestamp": ts_now, "access_token": ACTIVE_ACCESS_TOKEN,
+                "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_perf, "start_date": start_str, "end_date": end_str,
+                "campaign_id_list": ",".join(ids_to_query)
+            }).json()
 
-            # Ambil objek response-nya dulu
-            response_data = res_perf.get("response", {})
-            
-            # Shopee API ini biasanya mengembalikan dictionary yang berisi 'campaign_list'
-            # Kita langsung ambil list campaign-nya
-            campaign_result_list = response_data.get("campaign_list", []) if isinstance(response_data, dict) else []
+            perf_data = res_perf.get("response", {}).get("campaign_list", [])
 
             ads_rows = []
-            idx = 1
-            
-            for camp in campaign_result_list:
-                # Kita agregat data jika ada beberapa hari (Daily Performance)
+            for camp in perf_data:
+                c_id = str(camp.get("campaign_id"))
+                setting = settings_map.get(c_id, {})
                 metrics = camp.get("metrics_list", [])
-                
-                if not metrics:
-                    continue
 
-                # Inisialisasi variabel total (sama seperti sebelumnya)
+                # Agregat data dari list harian
+                # PERBAIKAN: Menggunakan keys yang benar (clicks, expense, broad_order, dll)
                 t_imp = sum(m.get("impression", 0) for m in metrics)
                 t_clk = sum(m.get("clicks", 0) for m in metrics)
-                t_cost = sum(m.get("expense", 0) for m in metrics)
+                t_cost = sum(m.get("expense", 0) for m in metrics) 
                 t_gmv = sum(m.get("broad_gmv", 0) for m in metrics)
                 t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics)
                 t_ord = sum(m.get("broad_order", 0) for m in metrics)
@@ -733,30 +712,25 @@ with tab5:
                 t_sold = sum(m.get("broad_item_sold", 0) for m in metrics)
                 t_sold_dir = sum(m.get("direct_item_sold", 0) for m in metrics)
 
-                # Kalkulasi Rasio & Konversi Mata Uang (Micro ke IDR)
-                # Shopee micro: bagi 100.000
-                real_cost = t_cost / 100000 
-                real_gmv = t_gmv / 100000
-                real_gmv_dir = t_gmv_dir / 100000
-                
+                # Rumus & Format (ACOS, CTR, ROAS)
                 ctr = (t_clk / t_imp * 100) if t_imp else 0
                 cvr = (t_ord / t_clk * 100) if t_clk else 0
                 cvr_dir = (t_ord_dir / t_clk * 100) if t_clk else 0
-                acos = (real_cost / real_gmv * 100) if real_gmv else 0
-                acos_dir = (real_cost / real_gmv_dir * 100) if real_gmv_dir else 0
-                roas = (real_gmv / real_cost) if real_cost else 0
-                roas_dir = (real_gmv_dir / real_cost) if real_cost else 0
-                cpa = (real_cost / t_ord) if t_ord else 0
-                cpa_dir = (real_cost / t_ord_dir) if t_ord_dir else 0
+                roas = (t_gmv / t_cost) if t_cost else 0
+                roas_dir = (t_gmv_dir / t_cost) if t_cost else 0
+                acos = (t_cost / t_gmv * 100) if t_gmv else 0
+                acos_dir = (t_cost / t_gmv_dir * 100) if t_gmv_dir else 0
+                cpa = (t_cost / t_ord) if t_ord else 0
+                cpa_dir = (t_cost / t_ord_dir) if t_ord_dir else 0
 
                 ads_rows.append({
-                    "Urutan": idx,
-                    "Nama Iklan": camp.get("ad_name", "N/A"),
-                    "Status": "Berjalan",
+                    "Urutan": len(ads_rows) + 1,
+                    "Nama Iklan": setting.get("ad_name", "N/A"),
+                    "Status": "Berjalan" if setting.get("state") == "enabled" else "Berhenti",
                     "Jenis Iklan": "Iklan Produk",
-                    "Kode Produk": camp.get("campaign_id"),
+                    "Kode Produk": c_id,
                     "Tampilan Iklan": t_imp,
-                    "Mode Bidding": camp.get("ad_type", "Manual"),
+                    "Mode Bidding": setting.get("ad_type", "-"),
                     "Penempatan Iklan": "Semua Penempatan",
                     "Tanggal Mulai": f"{start_str} 00:00:00",
                     "Tanggal Selesai": "Tidak Terbatas",
@@ -771,9 +745,9 @@ with tab5:
                     "Biaya per Konversi Langsung": round(cpa_dir, 2),
                     "Produk Terjual": t_sold,
                     "Terjual Langsung": t_sold_dir,
-                    "Omzet Penjualan": round(real_gmv, 2),
-                    "Penjualan Langsung (GMV Langsung)": round(real_gmv_dir, 2),
-                    "Biaya": round(real_cost, 2),
+                    "Omzet Penjualan": round(t_gmv, 2),
+                    "Penjualan Langsung (GMV Langsung)": round(t_gmv_dir, 2),
+                    "Biaya": round(t_cost, 2),
                     "Efektifitas Iklan": round(roas, 2),
                     "Efektivitas Langsung": round(roas_dir, 2),
                     "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{acos:.2f}%",
@@ -782,7 +756,6 @@ with tab5:
                     "Jumlah Klik Produk": "-",
                     "Persentase Klik Produk": "-"
                 })
-                idx += 1
 
                 df_ads = pd.DataFrame(ads_rows)
 
