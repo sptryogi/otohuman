@@ -705,7 +705,7 @@ with tab5:
                 }
 
 
-            if not ads_list:
+            if not perf_list:
                 st.warning("Tidak ada data iklan di periode ini.")
             else:
                 ads_rows = []
