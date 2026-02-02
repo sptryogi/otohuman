@@ -699,8 +699,10 @@ with tab5:
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_camp,
-                "time_from": time_from,
-                "time_to": time_to
+                # "time_from": time_from,
+                # "time_to": time_to
+                "start_date": start_ads.strftime("%d-%m-%Y"),
+                "end_date": end_ads.strftime("%d-%m-%Y")
             }
             
             res_camp = requests.get(BASE_URL + path_campaign, params=params_camp).json()
