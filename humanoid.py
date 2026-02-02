@@ -663,15 +663,10 @@ with tab5:
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_ads,
-            
-                "ads_type": "product",
-                "view_by": "product",
-                "time_granularity": "DAY",
-            
+                "time_granularity": "ALL",
                 "time_from": time_from,
                 "time_to": time_to,
                 "page_size": 50,
-                "offset": 0
             }
 
             res_ads = requests.get(BASE_URL + path_ads, params=params_ads).json()
