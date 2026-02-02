@@ -664,17 +664,20 @@ with tab5:
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_ads,
             
-                "ads_type": "keyword",
+                "ads_type": "product",
                 "view_by": "product",
-                "time_granularity": "ALL",
+                "time_granularity": "DAY",
+            
                 "time_from": time_from,
                 "time_to": time_to,
-                "offset": 0,
-                "page_size": 50
+                "page_size": 50,
+                "offset": 0
             }
 
             res_ads = requests.get(BASE_URL + path_ads, params=params_ads).json()
-            ads_list = res_ads.get("response", {}).get("performance_list", [])
+            # ads_list = res_ads.get("response", {}).get("performance_list", [])
+            resp = res_ads.get("response", {})
+            ads_list = resp.get("performance_list") or resp.get("list") or []
 
             # ⬇️ TAMBAHKAN INI UNTUK CEK ERROR ASLI
             if "error" in res_ads and res_ads["error"] != "":
