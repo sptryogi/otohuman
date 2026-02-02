@@ -657,12 +657,28 @@ with tab5:
             ts_ads = int(time.time())
             sign_ads = generate_sign_full(path_ads, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
+            # params_ads = {
+            #     "partner_id": PARTNER_ID,
+            #     "timestamp": ts_ads,
+            #     "access_token": ACTIVE_ACCESS_TOKEN,
+            #     "shop_id": int(ACTIVE_SHOP_ID),
+            #     "sign": sign_ads,
+            #     "time_from": time_from,
+            #     "time_to": time_to,
+            #     "page_size": 50
+            # }
             params_ads = {
                 "partner_id": PARTNER_ID,
                 "timestamp": ts_ads,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
                 "sign": sign_ads,
+            
+                # ⬇️ WAJIB
+                "ads_type": "product",
+                "view_by": "product",
+                "time_granularity": "DAY",
+            
                 "time_from": time_from,
                 "time_to": time_to,
                 "page_size": 50
