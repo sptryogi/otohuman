@@ -637,6 +637,13 @@ with tab5:
     else:
         selected_shop_ads = st.selectbox("Pilih Toko untuk Iklan", shop_names, key="shop_ads")
 
+        status_filter = st.selectbox(
+            "Filter Status Iklan",
+            ["Semua", "Berjalan", "Berhenti"],
+            key="ads_status_filter"
+        )
+
+
         col_ad1, col_ad2 = st.columns(2)
         with col_ad1:
             # Default 7 hari ke belakang
@@ -729,9 +736,12 @@ with tab5:
 
                 # Nama Iklan & Status
                 # s.get("ad_name") biasanya berisi nama produk/campaign asli
-                nama_asli = s.get("ad_name") or s.get("campaign_name") or f"Produk {c_id}"
+                nama_asli = s.get("ad_name") or s.get("campaign_name")
                 st_raw = str(s.get("state", "")).lower()
                 status_text = "Berjalan" if st_raw == "enabled" else "Berhenti"
+
+                if status_filter != "Semua" and status_text != status_filter:
+                    continue
                 
                 # Mode Bidding (Logic berdasarkan data Shopee)
                 bidding = "GMV Max Auto" if s.get("auto_optimizing_enabled") else "Manual"
