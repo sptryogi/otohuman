@@ -649,33 +649,26 @@ with tab5:
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
 
-            # Format tanggal wajib DD-MM-YYYY sesuai dokumentasi Ads
             start_str = start_ads.strftime("%d-%m-%Y")
             end_str = end_ads.strftime("%d-%m-%Y")
             ts_now = int(time.time())
 
-            # ---------------------------------------------------------
-            # 1. AMBIL SEMUA CAMPAIGN ID (Cari & Penemuan)
-            # ---------------------------------------------------------
+            # 1. Ambil List ID Iklan
             path_id = "/api/v2/ads/get_product_level_campaign_id_list"
             sign_id = generate_sign_full(path_id, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-            
             res_id = requests.get(BASE_URL + path_id, params={
                 "partner_id": int(PARTNER_ID), "timestamp": ts_now,
-                "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID), 
-                "sign": sign_id
+                "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_id
             }).json()
             
             campaign_raw = (res_id.get("response") or {}).get("campaign_list") or []
             all_ids = [str(c["campaign_id"]) for c in campaign_raw]
 
             if not all_ids:
-                st.warning("⚠️ Tidak ditemukan kampanye iklan pada toko ini.")
+                st.warning("Tidak ada data iklan.")
                 st.stop()
 
-            # ---------------------------------------------------------
-            # 2. AMBIL DETAIL SETTINGS (Batch 20)
-            # ---------------------------------------------------------
+            # 2. Ambil Setting Info (Nama Iklan, Status, Bidding)
             settings_map = {}
             for i in range(0, len(all_ids), 20):
                 batch = all_ids[i:i+20]
@@ -690,9 +683,7 @@ with tab5:
                 for s in info_list:
                     settings_map[str(s["campaign_id"])] = s
 
-            # ---------------------------------------------------------
-            # 3. AMBIL PERFORMANCE DATA (Batch 20)
-            # ---------------------------------------------------------
+            # 3. Ambil Performance
             perf_map = {}
             for i in range(0, len(all_ids), 20):
                 batch = all_ids[i:i+20]
@@ -701,35 +692,31 @@ with tab5:
                 res_perf = requests.get(BASE_URL + path_perf, params={
                     "partner_id": int(PARTNER_ID), "timestamp": ts_now, "access_token": ACTIVE_ACCESS_TOKEN,
                     "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_perf, 
-                    "start_date": start_str, "end_date": end_str,
-                    "campaign_id_list": ",".join(batch)
+                    "start_date": start_str, "end_date": end_str, "campaign_id_list": ",".join(batch)
                 }).json()
 
-                perf_list = (res_perf.get("response") or {}).get("campaign_list") or []
-                for p in perf_list:
+                p_list = (res_perf.get("response") or {}).get("campaign_list") or []
+                for p in p_list:
                     perf_map[str(p.get("campaign_id"))] = p.get("metrics_list") or []
 
-            # ---------------------------------------------------------
-            # 4. PROSES & FORMATTING SESUAI CSV CONTOH
-            # ---------------------------------------------------------
+            # 4. Susun Data Sesuai Format CSV Official
             ads_rows = []
             for idx, c_id in enumerate(all_ids, 1):
                 s = settings_map.get(c_id, {})
                 metrics = perf_map.get(c_id, [])
 
-                # Penjumlahan metrik harian (Total dalam periode)
+                # Total Metrik (Angka utuh Micro IDR agar sesuai contoh)
                 t_imp = sum(m.get("impression", 0) for m in metrics)
                 t_clk = sum(m.get("clicks", 0) for m in metrics)
-                # Biaya & GMV dibagi 100.000 karena API Shopee menggunakan format Micro
-                t_cost = sum(m.get("expense", 0) for m in metrics) / 100000
-                t_gmv = sum(m.get("broad_gmv", 0) for m in metrics) / 100000
-                t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics) / 100000
+                t_cost = sum(m.get("expense", 0) for m in metrics) # Tanpa dibagi 100rb agar sama dengan contoh
+                t_gmv = sum(m.get("broad_gmv", 0) for m in metrics)
+                t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics)
                 t_ord = sum(m.get("broad_order", 0) for m in metrics)
                 t_ord_dir = sum(m.get("direct_order", 0) for m in metrics)
                 t_sold = sum(m.get("broad_item_sold", 0) for m in metrics)
                 t_sold_dir = sum(m.get("direct_item_sold", 0) for m in metrics)
 
-                # Perhitungan Rasio
+                # Hitung Rasio
                 ctr = (t_clk / t_imp * 100) if t_imp else 0
                 cvr = (t_ord / t_clk * 100) if t_clk else 0
                 cvr_dir = (t_ord_dir / t_clk * 100) if t_clk else 0
@@ -740,25 +727,25 @@ with tab5:
                 cpa = (t_cost / t_ord) if t_ord else 0
                 cpa_dir = (t_cost / t_ord_dir) if t_ord_dir else 0
 
-                # Penentuan teks (Status & Nama)
+                # Nama Iklan & Status
+                # s.get("ad_name") biasanya berisi nama produk/campaign asli
+                nama_asli = s.get("ad_name") or s.get("campaign_name") or f"Produk {c_id}"
                 st_raw = str(s.get("state", "")).lower()
-                status_indo = "Berjalan" if st_raw == "enabled" else "Berhenti"
-                nama_iklan = s.get("ad_name") or s.get("campaign_name") or f"Iklan {c_id}"
+                status_text = "Berjalan" if st_raw == "enabled" else "Berhenti"
                 
-                # Mapping Mode Bidding (Opsional, agar mirip contoh)
-                bidding_mode = str(s.get("ad_type", "-")).replace("keyword", "Manual").replace("discovery", "Penemuan").upper()
+                # Mode Bidding (Logic berdasarkan data Shopee)
+                bidding = "GMV Max Auto" if s.get("auto_optimizing_enabled") else "Manual"
 
-                # Row sesuai urutan kolom file CSV contoh
                 ads_rows.append({
                     "Urutan": idx,
-                    "Nama Iklan": nama_iklan,
-                    "Status": status_indo,
+                    "Nama Iklan": nama_asli,
+                    "Status": status_text,
                     "Jenis Iklan": "Iklan Produk",
                     "Kode Produk": c_id,
                     "Tampilan Iklan": t_imp,
-                    "Mode Bidding": bidding_mode,
+                    "Mode Bidding": bidding,
                     "Penempatan Iklan": "Semua Penempatan",
-                    "Tanggal Mulai": f"{start_str} 00:00:00",
+                    "Tanggal Mulai": s.get("start_time", f"{start_str} 00:00:00"),
                     "Tanggal Selesai": "Tidak Terbatas",
                     "Dilihat": t_imp,
                     "Jumlah Klik": t_clk,
@@ -771,9 +758,9 @@ with tab5:
                     "Biaya per Konversi Langsung": round(cpa_dir, 2),
                     "Produk Terjual": t_sold,
                     "Terjual Langsung": t_sold_dir,
-                    "Omzet Penjualan": round(t_gmv, 2),
-                    "Penjualan Langsung (GMV Langsung)": round(t_gmv_dir, 2),
-                    "Biaya": round(t_cost, 2),
+                    "Omzet Penjualan": int(t_gmv),
+                    "Penjualan Langsung (GMV Langsung)": int(t_gmv_dir),
+                    "Biaya": int(t_cost),
                     "Efektifitas Iklan": round(roas, 2),
                     "Efektivitas Langsung": round(roas_dir, 2),
                     "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{acos:.2f}%",
