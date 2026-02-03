@@ -657,55 +657,56 @@ with tab5:
             ts_now = int(time.time())
 
             # ---------------------------------------------------------
-            # 1. AMBIL LIST CAMPAIGN ID (Cari & Penemuan)
+            # 1. AMBIL SEMUA CAMPAIGN ID (TANPA FILTER STATUS)
             # ---------------------------------------------------------
             path_id = "/api/v2/ads/get_product_level_campaign_id_list"
             sign_id = generate_sign_full(path_id, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+            
+            # Kita tarik agak banyak (misal limit 50) supaya semua iklan muncul
             res_id = requests.get(BASE_URL + path_id, params={
                 "partner_id": int(PARTNER_ID), "timestamp": ts_now,
-                "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_id
+                "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID), 
+                "sign": sign_id
             }).json()
             
-            campaign_list = (res_id.get("response") or {}).get("campaign_list") or []
+            campaign_raw = (res_id.get("response") or {}).get("campaign_list") or []
+            all_ids = [str(c["campaign_id"]) for c in campaign_raw]
 
-            if not campaign_list:
-                st.warning("⚠️ Tidak ada iklan yang ditemukan di toko ini.")
+            if not all_ids:
+                st.warning("⚠️ Tidak ditemukan ID iklan untuk toko ini.")
                 st.stop()
 
-            # Ambil semua ID kampanye
-            all_ids = [str(c["campaign_id"]) for c in campaign_list]
-
             # ---------------------------------------------------------
-            # 2. AMBIL DETAIL SETTING (Nama & Status)
+            # 2. AMBIL SETTING INFO (UNTUK NAMA & STATUS)
             # ---------------------------------------------------------
-            # Kita pecah per 20 ID agar API tidak berat
             settings_map = {}
+            # Proses per batch 20 agar tidak ditolak Shopee
             for i in range(0, len(all_ids), 20):
-                batch_ids = all_ids[i:i+20]
+                batch = all_ids[i:i+20]
                 path_info = "/api/v2/ads/get_product_level_campaign_setting_info"
                 sign_info = generate_sign_full(path_info, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                 res_info = requests.get(BASE_URL + path_info, params={
                     "partner_id": int(PARTNER_ID), "timestamp": ts_now, "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_info, "campaign_id_list": ",".join(batch_ids)
+                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_info, "campaign_id_list": ",".join(batch)
                 }).json()
                 
                 info_list = (res_info.get("response") or {}).get("campaign_list") or []
                 for s in info_list:
-                    c_id = str(s.get("campaign_id"))
-                    settings_map[c_id] = s
+                    settings_map[str(s["campaign_id"])] = s
 
             # ---------------------------------------------------------
-            # 3. AMBIL PERFORMANCE DATA (Angka-angka)
+            # 3. AMBIL PERFORMANCE (ANGKA DALAM PERIODE)
             # ---------------------------------------------------------
             perf_map = {}
             for i in range(0, len(all_ids), 20):
-                batch_ids = all_ids[i:i+20]
+                batch = all_ids[i:i+20]
                 path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
                 sign_perf = generate_sign_full(path_perf, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                 res_perf = requests.get(BASE_URL + path_perf, params={
                     "partner_id": int(PARTNER_ID), "timestamp": ts_now, "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_perf, "start_date": start_str, "end_date": end_str,
-                    "campaign_id_list": ",".join(batch_ids)
+                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_perf, 
+                    "start_date": start_str, "end_date": end_str,
+                    "campaign_id_list": ",".join(batch)
                 }).json()
 
                 perf_list = (res_perf.get("response") or {}).get("campaign_list") or []
@@ -713,18 +714,18 @@ with tab5:
                     perf_map[str(p.get("campaign_id"))] = p.get("metrics_list") or []
 
             # ---------------------------------------------------------
-            # 4. GABUNGKAN DATA KE FORMAT EXCEL KAMU
+            # 4. PENYUSUNAN TABEL (MENGGUNAKAN KOLOM REQUEST)
             # ---------------------------------------------------------
             ads_rows = []
             for idx, c_id in enumerate(all_ids, 1):
-                setting = settings_map.get(c_id, {})
+                s = settings_map.get(c_id, {})
                 metrics = perf_map.get(c_id, [])
 
-                # Agregat angka dari metrics_list
+                # Penjumlahan metrik harian dalam periode terpilih
                 t_imp = sum(m.get("impression", 0) for m in metrics)
                 t_clk = sum(m.get("clicks", 0) for m in metrics)
-                # Shopee micro: bagi 100.000 untuk IDR
-                t_cost = sum(m.get("expense", 0) for m in metrics) / 100000 
+                # Konversi Micro ke IDR (bagi 100.000)
+                t_cost = sum(m.get("expense", 0) for m in metrics) / 100000
                 t_gmv = sum(m.get("broad_gmv", 0) for m in metrics) / 100000
                 t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics) / 100000
                 t_ord = sum(m.get("broad_order", 0) for m in metrics)
@@ -732,7 +733,7 @@ with tab5:
                 t_sold = sum(m.get("broad_item_sold", 0) for m in metrics)
                 t_sold_dir = sum(m.get("direct_item_sold", 0) for m in metrics)
 
-                # Kalkulasi Rasio
+                # Hitung Rasio
                 ctr = (t_clk / t_imp * 100) if t_imp else 0
                 cvr = (t_ord / t_clk * 100) if t_clk else 0
                 cvr_dir = (t_ord_dir / t_clk * 100) if t_clk else 0
@@ -743,19 +744,18 @@ with tab5:
                 cpa = (t_cost / t_ord) if t_ord else 0
                 cpa_dir = (t_cost / t_ord_dir) if t_ord_dir else 0
 
-                # Nama Iklan (Cek beberapa field karena Shopee sering ganti nama key)
-                nama_iklan = setting.get("campaign_name") or setting.get("ad_name") or "N/A"
-                status_raw = str(setting.get("state", "")).lower()
-                status_text = "Berjalan" if status_raw == "enabled" else "Berhenti"
+                # Penentuan Status
+                st_raw = str(s.get("state", "")).lower()
+                status_indo = "Berjalan" if st_raw == "enabled" else "Berhenti"
 
                 ads_rows.append({
                     "Urutan": idx,
-                    "Nama Iklan": nama_iklan,
-                    "Status": status_text,
+                    "Nama Iklan": s.get("ad_name") or s.get("campaign_name") or f"ID:{c_id}",
+                    "Status": status_indo,
                     "Jenis Iklan": "Iklan Produk",
                     "Kode Produk": c_id,
                     "Tampilan Iklan": t_imp,
-                    "Mode Bidding": setting.get("ad_type", "-").upper(),
+                    "Mode Bidding": s.get("ad_type", "Manual").upper(),
                     "Penempatan Iklan": "Semua Penempatan",
                     "Tanggal Mulai": f"{start_str} 00:00:00",
                     "Tanggal Selesai": "Tidak Terbatas",
@@ -781,7 +781,7 @@ with tab5:
                     "Jumlah Klik Produk": "-",
                     "Persentase Klik Produk": "-"
                 })
-
+                
                 df_ads = pd.DataFrame(ads_rows)
 
                 # ===============================
