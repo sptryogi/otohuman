@@ -296,9 +296,8 @@ with tab3:
         with col_b:
             end_date = st.date_input("Tanggal Akhir", datetime.date.today())
 
-        # Konversi ke Timestamp
         time_from = int(time.mktime(start_date.timetuple()))
-        time_to = int(time.mktime(end_date.timetuple())) + 86399 # Sampai akhir hari tersebut
+        time_to = int(time.mktime(end_date.timetuple())) + 86399 
 
         if st.button("📥 Tarik Order-all"):
             token_row = get_shop_token(selected_shop)
@@ -307,56 +306,48 @@ with tab3:
 
             all_order_sns = []
             cursor = ""
-            
-            # 1. LOOP PAGINATION UNTUK LIST ORDER
             status_info = st.empty()
+            
+            # 1. LOOP LIST ORDER
             while True:
                 path = "/api/v2/order/get_order_list"
-                timestamp = int(time.time())
-                sign = generate_sign_full(path, timestamp, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                
+                ts = int(time.time())
+                sign = generate_sign_full(path, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                 params = {
-                    "partner_id": PARTNER_ID,
-                    "timestamp": timestamp,
-                    "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID),
-                    "sign": sign,
-                    "time_range_field": "create_time",
-                    "time_from": time_from,
-                    "time_to": time_to,
-                    "page_size": 50,
-                    "cursor": cursor
+                    "partner_id": PARTNER_ID, "timestamp": ts, "access_token": ACTIVE_ACCESS_TOKEN,
+                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign,
+                    "time_range_field": "create_time", "time_from": time_from, "time_to": time_to,
+                    "page_size": 50, "cursor": cursor
                 }
-                
                 res = requests.get(BASE_URL + path, params=params).json()
                 resp_data = res.get("response", {})
                 orders = resp_data.get("order_list", [])
-                
                 for o in orders:
                     all_order_sns.append(o["order_sn"])
                 
-                status_info.info(f"Mengambil daftar pesanan... (Terkumpul: {len(all_order_sns)})")
-                
-                if not resp_data.get("has_next_page"):
-                    break
+                if not resp_data.get("has_next_page"): break
                 cursor = resp_data.get("next_cursor")
+                status_info.info(f"Mengambil daftar pesanan... ({len(all_order_sns)})")
 
             if not all_order_sns:
-                st.warning("Tidak ada pesanan di rentang tanggal ini.")
+                st.warning("Tidak ada pesanan.")
                 st.stop()
 
-            # 2. AMBIL DETAIL & ESCROW (DENGAN SLEEPER)
+            # 2. DETAIL & FINANCE (ESCROW)
             rows = []
             progress_bar = st.progress(0)
             
-            # Kita pecah per 50 untuk get_order_detail
             for i in range(0, len(all_order_sns), 50):
                 batch_sns = all_order_sns[i:i+50]
-                
                 path2 = "/api/v2/order/get_order_detail"
                 ts2 = int(time.time())
                 sign2 = generate_sign_full(path2, ts2, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                opt_fields = "buyer_username,recipient_address,estimated_shipping_fee,actual_shipping_fee,pay_time,ship_by_date,order_status,cancel_reason,item_list,payment_method,shipping_carrier,note,message,create_time,finish_time,tracking_number,total_amount,pickup_done_time,return_status"
+                
+                # Menambahkan field 'arrange_shipment_date' ke request
+                opt_fields = ("buyer_username,recipient_address,estimated_shipping_fee,actual_shipping_fee,"
+                             "pay_time,ship_by_date,order_status,cancel_reason,item_list,payment_method,"
+                             "shipping_carrier,note,message,create_time,finish_time,tracking_number,"
+                             "total_amount,pickup_done_time,return_status,arrange_shipment_date")
 
                 p2 = {
                     "partner_id": PARTNER_ID, "timestamp": ts2, "access_token": ACTIVE_ACCESS_TOKEN,
@@ -369,17 +360,18 @@ with tab3:
 
                 for o in orders_detail:
                     order_sn = o.get("order_sn")
-                    status_info.info(f"Memproses data keuangan pesanan: {order_sn}")
+                    status_info.info(f"Mengolah Finance Pesanan: {order_sn}")
                     
-                    # --- SLEEPER UNTUK ANTI-LIMIT ---
-                    time.sleep(0.3) # Jeda 0.3 detik per order
-                    
+                    time.sleep(0.3) # Sesuai permintaan agar tidak limit
                     esc = get_escrow_detail(order_sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     income_info = esc.get("order_income_info", {})
                     addr = o.get("recipient_address", {})
                     
                     for item in o.get("item_list", []):
+                        qty = item.get("model_quantity_purchased", 0)
+                        price = item.get("model_discounted_price", 0)
                         weight = item.get("weight", 0)
+                        
                         rows.append({
                             "No. Pesanan": order_sn,
                             "Status Pesanan": o.get("order_status"),
@@ -398,28 +390,32 @@ with tab3:
                             "Nomor Referensi SKU": item.get("model_sku"),
                             "Nama Variasi": item.get("model_name"),
                             "Harga Awal": item.get("model_original_price"),
-                            "Harga Setelah Diskon": item.get("model_discounted_price"),
-                            "Jumlah": item.get("model_quantity_purchased"),
+                            "Harga Setelah Diskon": price,
+                            "Jumlah": qty,
                             "Returned quantity": item.get("is_return_item"),
-                            "Total Harga Produk": item.get("model_discounted_price", 0) * item.get("model_quantity_purchased", 0),
+                            "Total Harga Produk": price * qty,
                             
-                            # --- KOLOM FINANCE (DARI ESCROW) ---
+                            # Kolom Finance Berdasarkan Escrow
                             "Total Diskon": income_info.get("seller_vouchers", 0) + income_info.get("seller_absorption_bundle_discount", 0),
                             "Diskon Dari Penjual": income_info.get("seller_vouchers", 0),
                             "Diskon Dari Shopee": income_info.get("shopee_vouchers", 0),
                             "Berat Produk": weight,
-                            "Jumlah Produk di Pesan": item.get("model_quantity_purchased"),
-                            "Total Berat": weight * item.get("model_quantity_purchased"),
+                            "Jumlah Produk di Pesan": qty,
+                            "Total Berat": weight * qty,
                             "Voucher Ditanggung Penjual": income_info.get("seller_vouchers", 0),
                             "Cashback Koin": income_info.get("coin", 0),
                             "Voucher Ditanggung Shopee": income_info.get("shopee_vouchers", 0),
-                            "Paket Diskon": income_info.get("bundle_discount_from_seller", 0),
+                            "Paket Diskon": income_info.get("bundle_discount_from_seller", 0) + income_info.get("bundle_discount_from_shopee", 0),
+                            "Paket Diskon (Diskon dari Shopee)": income_info.get("bundle_discount_from_shopee", 0),
+                            "Paket Diskon (Diskon dari Penjual)": income_info.get("bundle_discount_from_seller", 0),
                             "Potongan Koin Shopee": income_info.get("coin", 0),
+                            "Diskon Kartu Kredit": income_info.get("credit_card_promotion", 0),
                             "Ongkos Kirim Dibayar oleh Pembeli": o.get("actual_shipping_fee"),
+                            "Estimasi Potongan Biaya Pengiriman": income_info.get("shopee_shipping_free_subsidies", 0),
+                            "Ongkos Kirim Pengembalian Barang": income_info.get("reverse_shipping_fee", 0),
                             "Total Pembayaran": o.get("total_amount"),
                             "Perkiraan Ongkos Kirim": o.get("estimated_shipping_fee"),
                             
-                            # --- DATA PEMBELI ---
                             "Catatan dari Pembeli": o.get("message"),
                             "Catatan": o.get("note"),
                             "Username (Pembeli)": o.get("buyer_username"),
@@ -430,9 +426,8 @@ with tab3:
                             "Provinsi": addr.get("state"),
                             "Waktu Pesanan Selesai": pd.to_datetime(o.get("finish_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if o.get("finish_time") else ""
                         })
-                
-                progress = min((i + 50) / len(all_order_sns), 1.0)
-                progress_bar.progress(progress)
+
+                progress_bar.progress(min((i + 50) / len(all_order_sns), 1.0))
 
             df = pd.DataFrame(rows)
             output = io.BytesIO()
