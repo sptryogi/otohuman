@@ -694,10 +694,23 @@ with tab5:
             
             res_set = requests.get(BASE_URL + path_setting, params=params_set).json()
             
+            # ---------- WAJIB ADA ----------
+            resp_set = res_set.get("response")
+            
+            if not resp_set:
+                st.warning("Campaign setting kosong (Shopee tidak mengembalikan data).")
+                settings_list = []
+            else:
+                settings_list = resp_set.get("campaign_list", [])
+            
             campaign_map = {}
-            for c in res_set.get("response", {}).get("campaign_list", []):
-                campaign_map[c["campaign_id"]] = {
-                    "nama": c.get("ad_name"),
+            for c in settings_list:
+                cid = c.get("campaign_id")
+                if not cid:
+                    continue
+            
+                campaign_map[cid] = {
+                    "nama": c.get("ad_name", "UNKNOWN"),
                     "bidding": "GMV Max Auto" if c.get("ad_type") == "auto" else "Manual",
                     "placement": c.get("campaign_placement", "Semua Penempatan"),
                     "status": "Berjalan"
@@ -720,20 +733,26 @@ with tab5:
             
             res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
             
-            if res_perf.get("error"):
-                st.error(res_perf.get("message"))
+            resp_perf = res_perf.get("response")
+            
+            if not resp_perf:
+                st.warning("Tidak ada data performa iklan di periode ini.")
                 st.stop()
 
 
             ads_rows = []
             idx = 1
             
-            for shop in res_perf.get("response", []):
-                for camp in shop.get("campaign_list", []):
-                    meta = campaign_map.get(camp["campaign_id"], {})
+            for shop in resp_perf:
+                campaign_list = shop.get("campaign_list", [])
+                if not isinstance(campaign_list, list):
+                    continue
+            
+                for camp in campaign_list:
+                    cid = camp.get("campaign_id")
+                    meta = campaign_map.get(cid, {})
             
                     for m in camp.get("metrics_list", []):
-            
                         imp = m.get("impression", 0)
                         clicks = m.get("clicks", 0)
                         cost = m.get("expense", 0)
@@ -749,14 +768,14 @@ with tab5:
             
                         ads_rows.append({
                             "Urutan": idx,
-                            "Nama Iklan": meta.get("nama"),
-                            "Status": meta.get("status"),
+                            "Nama Iklan": meta.get("nama", "UNKNOWN"),
+                            "Status": meta.get("status", "-"),
                             "Jenis Iklan": "Iklan Produk",
-                            "Kode Produk": camp["campaign_id"],
+                            "Kode Produk": cid,
             
                             "Tampilan Iklan": imp,
-                            "Mode Bidding": meta.get("bidding"),
-                            "Penempatan Iklan": meta.get("placement"),
+                            "Mode Bidding": meta.get("bidding", "-"),
+                            "Penempatan Iklan": meta.get("placement", "-"),
                             "Tanggal Mulai": m.get("date"),
                             "Tanggal Selesai": "Tidak Terbatas",
             
