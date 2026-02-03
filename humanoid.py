@@ -639,27 +639,27 @@ with tab5:
 
         col_ad1, col_ad2 = st.columns(2)
         with col_ad1:
+            # Default 7 hari ke belakang
             start_ads = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=7), key="s_ads")
         with col_ad2:
             end_ads = st.date_input("Sampai Tanggal", datetime.date.today(), key="e_ads")
-
 
         if st.button("📊 Tarik Data Iklan"):
             token_row = get_shop_token(selected_shop_ads)
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
 
+            # Format tanggal wajib DD-MM-YYYY sesuai dokumentasi Ads
             start_str = start_ads.strftime("%d-%m-%Y")
             end_str = end_ads.strftime("%d-%m-%Y")
             ts_now = int(time.time())
 
             # ---------------------------------------------------------
-            # 1. AMBIL SEMUA CAMPAIGN ID (TANPA FILTER STATUS)
+            # 1. AMBIL SEMUA CAMPAIGN ID (Cari & Penemuan)
             # ---------------------------------------------------------
             path_id = "/api/v2/ads/get_product_level_campaign_id_list"
             sign_id = generate_sign_full(path_id, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             
-            # Kita tarik agak banyak (misal limit 50) supaya semua iklan muncul
             res_id = requests.get(BASE_URL + path_id, params={
                 "partner_id": int(PARTNER_ID), "timestamp": ts_now,
                 "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID), 
@@ -670,14 +670,13 @@ with tab5:
             all_ids = [str(c["campaign_id"]) for c in campaign_raw]
 
             if not all_ids:
-                st.warning("⚠️ Tidak ditemukan ID iklan untuk toko ini.")
+                st.warning("⚠️ Tidak ditemukan kampanye iklan pada toko ini.")
                 st.stop()
 
             # ---------------------------------------------------------
-            # 2. AMBIL SETTING INFO (UNTUK NAMA & STATUS)
+            # 2. AMBIL DETAIL SETTINGS (Batch 20)
             # ---------------------------------------------------------
             settings_map = {}
-            # Proses per batch 20 agar tidak ditolak Shopee
             for i in range(0, len(all_ids), 20):
                 batch = all_ids[i:i+20]
                 path_info = "/api/v2/ads/get_product_level_campaign_setting_info"
@@ -692,7 +691,7 @@ with tab5:
                     settings_map[str(s["campaign_id"])] = s
 
             # ---------------------------------------------------------
-            # 3. AMBIL PERFORMANCE (ANGKA DALAM PERIODE)
+            # 3. AMBIL PERFORMANCE DATA (Batch 20)
             # ---------------------------------------------------------
             perf_map = {}
             for i in range(0, len(all_ids), 20):
@@ -711,17 +710,17 @@ with tab5:
                     perf_map[str(p.get("campaign_id"))] = p.get("metrics_list") or []
 
             # ---------------------------------------------------------
-            # 4. PENYUSUNAN TABEL (MENGGUNAKAN KOLOM REQUEST)
+            # 4. PROSES & FORMATTING SESUAI CSV CONTOH
             # ---------------------------------------------------------
             ads_rows = []
             for idx, c_id in enumerate(all_ids, 1):
                 s = settings_map.get(c_id, {})
                 metrics = perf_map.get(c_id, [])
 
-                # Penjumlahan metrik harian dalam periode terpilih
+                # Penjumlahan metrik harian (Total dalam periode)
                 t_imp = sum(m.get("impression", 0) for m in metrics)
                 t_clk = sum(m.get("clicks", 0) for m in metrics)
-                # Konversi Micro ke IDR (bagi 100.000)
+                # Biaya & GMV dibagi 100.000 karena API Shopee menggunakan format Micro
                 t_cost = sum(m.get("expense", 0) for m in metrics) / 100000
                 t_gmv = sum(m.get("broad_gmv", 0) for m in metrics) / 100000
                 t_gmv_dir = sum(m.get("direct_gmv", 0) for m in metrics) / 100000
@@ -730,7 +729,7 @@ with tab5:
                 t_sold = sum(m.get("broad_item_sold", 0) for m in metrics)
                 t_sold_dir = sum(m.get("direct_item_sold", 0) for m in metrics)
 
-                # Hitung Rasio
+                # Perhitungan Rasio
                 ctr = (t_clk / t_imp * 100) if t_imp else 0
                 cvr = (t_ord / t_clk * 100) if t_clk else 0
                 cvr_dir = (t_ord_dir / t_clk * 100) if t_clk else 0
@@ -741,18 +740,23 @@ with tab5:
                 cpa = (t_cost / t_ord) if t_ord else 0
                 cpa_dir = (t_cost / t_ord_dir) if t_ord_dir else 0
 
-                # Penentuan Status
+                # Penentuan teks (Status & Nama)
                 st_raw = str(s.get("state", "")).lower()
                 status_indo = "Berjalan" if st_raw == "enabled" else "Berhenti"
+                nama_iklan = s.get("ad_name") or s.get("campaign_name") or f"Iklan {c_id}"
+                
+                # Mapping Mode Bidding (Opsional, agar mirip contoh)
+                bidding_mode = str(s.get("ad_type", "-")).replace("keyword", "Manual").replace("discovery", "Penemuan").upper()
 
+                # Row sesuai urutan kolom file CSV contoh
                 ads_rows.append({
                     "Urutan": idx,
-                    "Nama Iklan": s.get("ad_name") or s.get("campaign_name") or f"ID:{c_id}",
+                    "Nama Iklan": nama_iklan,
                     "Status": status_indo,
                     "Jenis Iklan": "Iklan Produk",
                     "Kode Produk": c_id,
                     "Tampilan Iklan": t_imp,
-                    "Mode Bidding": s.get("ad_type", "Manual").upper(),
+                    "Mode Bidding": bidding_mode,
                     "Penempatan Iklan": "Semua Penempatan",
                     "Tanggal Mulai": f"{start_str} 00:00:00",
                     "Tanggal Selesai": "Tidak Terbatas",
@@ -778,34 +782,34 @@ with tab5:
                     "Jumlah Klik Produk": "-",
                     "Persentase Klik Produk": "-"
                 })
-                
-                df_ads = pd.DataFrame(ads_rows)
 
-                # ===============================
-                # SIMPAN EXCEL
-                # ===============================
-                output_ads = io.BytesIO()
-                with pd.ExcelWriter(output_ads, engine="xlsxwriter") as writer:
-                    df_ads.to_excel(writer, index=False, sheet_name="Data Iklan")
+            df_ads = pd.DataFrame(ads_rows)
 
-                excel_ads_bytes = output_ads.getvalue()
-                range_ads_str = f"{start_ads} s/d {end_ads}"
+            # ===============================
+            # SIMPAN KE DATABASE & EXCEL
+            # ===============================
+            output_ads = io.BytesIO()
+            with pd.ExcelWriter(output_ads, engine="xlsxwriter") as writer:
+                df_ads.to_excel(writer, index=False, sheet_name="Data Iklan")
 
-                save_report_to_db(
-                    selected_shop_ads,
-                    f"ADS {range_ads_str}",
-                    excel_ads_bytes
-                )
+            excel_ads_bytes = output_ads.getvalue()
+            range_ads_str = f"{start_ads} s/d {end_ads}"
 
-                st.success("✅ Data Iklan berhasil diambil & disimpan ke database.")
-                st.dataframe(df_ads, use_container_width=True)
+            save_report_to_db(
+                selected_shop_ads,
+                f"ADS {range_ads_str}",
+                excel_ads_bytes
+            )
 
-                st.download_button(
-                    "⬇️ Download Data Iklan (Excel)",
-                    excel_ads_bytes,
-                    f"Ads_{selected_shop_ads}_{start_ads}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.success(f"✅ Berhasil menarik {len(df_ads)} baris data iklan.")
+            st.dataframe(df_ads, use_container_width=True)
+
+            st.download_button(
+                label="⬇️ Download Data Iklan (Excel)",
+                data=excel_ads_bytes,
+                file_name=f"Ads_{selected_shop_ads}_{start_ads}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
         # ===============================
         # RIWAYAT IKLAN
@@ -818,8 +822,9 @@ with tab5:
         if not history_ads:
             st.write("Belum ada riwayat laporan iklan.")
         else:
+            # Filter hanya yang bertipe ADS
             for item in history_ads:
-                if not item["date_range"].startswith("ADS"):
+                if not str(item["date_range"]).startswith("ADS"):
                     continue
 
                 col1, col2, col3 = st.columns([3, 3, 2])
@@ -830,7 +835,7 @@ with tab5:
                     data=item["csv_content"],
                     file_name=f"Ads_{selected_shop_ads}_{item['created_at'][:10]}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=f"ads_{item['id']}"
+                    key=f"ads_dl_{item['id']}"
                 )
 
 with tab6:
