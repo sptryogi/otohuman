@@ -629,8 +629,8 @@ with tab4:
                     )
 
 with tab5:
-    st.header("📢 Data Iklan Keseluruhan")
-    st.info("Mengambil data performa iklan Shopee Ads dalam periode tertentu.")
+    st.header("📢 Data Iklan Keseluruhan (Per Produk)")
+    st.info("Menggabungkan data dari Campaign List, Setting Info, dan Daily Performance.")
 
     if not shop_names:
         st.warning("Belum ada toko.")
@@ -639,147 +639,125 @@ with tab5:
 
         col_ad1, col_ad2 = st.columns(2)
         with col_ad1:
-            # Default 7 hari ke belakang
             start_ads = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=7), key="s_ads")
         with col_ad2:
-            end_ads = st.date_input("Sampai Tanggal", datetime.date.today(), key="e_ads")
+            end_ads = st.date_input("Sampai Tanggal", datetime.date.today() - datetime.timedelta(days=1), key="e_ads")
 
         if st.button("📊 Tarik Data Iklan"):
             token_row = get_shop_token(selected_shop_ads)
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
 
-            start_str = start_ads.strftime("%d-%m-%Y")
-            end_str = end_ads.strftime("%d-%m-%Y")
-            ts_now = int(time.time())
+            # 🔥 FORMAT TANGGAL SESUAI DOKUMENTASI: DD-MM-YYYY
+            s_date = start_ads.strftime("%d-%m-%Y")
+            e_date = end_ads.strftime("%d-%m-%Y")
 
-            path_all = "/api/v2/ads/get_all_cpc_ads_daily_performance"
-            sign_all = generate_sign_full(path_all, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-            
-            res_all = requests.get(BASE_URL + path_all, params={
+            # 1. AMBIL DAFTAR CAMPAIGN ID
+            path_list = "/api/v2/ads/get_product_level_campaign_id_list"
+            ts = int(time.time())
+            params_list = {
                 "partner_id": int(PARTNER_ID),
-                "timestamp": ts_now,
+                "timestamp": ts,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_all,
-                "start_date": start_str,
-                "end_date": end_str
-            }).json()
-            
-            all_perf = (res_all.get("response") or {}).get("campaign_list") or []
-            
-            if not all_perf:
-                st.warning("Tidak ada performa iklan CPC pada periode ini.")
-                st.stop()
+                "sign": generate_sign_full(path_list, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+            }
+            res_list = requests.get(BASE_URL + path_list, params=params_list).json()
+            campaign_ids = res_list.get("response", {}).get("campaign_id_list", [])
+
+            if not campaign_ids:
+                st.warning("Tidak ada kampanye iklan ditemukan.")
+            else:
+                ads_rows = []
+                progress_bar = st.progress(0)
                 
-            active_campaign_ids = [
-                str(c["campaign_id"])
-                for c in all_perf
-                if c.get("impression", 0) > 0
-            ]
-            
-            campaign_perf_map = {}
+                # Kita ambil data per campaign (Bisa dioptimalkan dengan batch jika API mendukung)
+                for i, c_id in enumerate(campaign_ids):
+                    # 2. AMBIL SETTING INFO (Untuk Nama & Item ID)
+                    path_info = "/api/v2/ads/get_product_level_campaign_setting_info"
+                    params_info = params_list.copy()
+                    params_info["campaign_id"] = c_id
+                    params_info["sign"] = generate_sign_full(path_info, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                    res_info = requests.get(BASE_URL + path_info, params=params_info).json()
+                    info = res_info.get("response", {})
 
-            for i in range(0, len(active_campaign_ids), 20):
-                batch = active_campaign_ids[i:i+20]
-            
-                path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
-                sign_perf = generate_sign_full(path_perf, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-            
-                res_perf = requests.get(BASE_URL + path_perf, params={
-                    "partner_id": int(PARTNER_ID),
-                    "timestamp": ts_now,
-                    "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID),
-                    "sign": sign_perf,
-                    "start_date": start_str,
-                    "end_date": end_str,
-                    "campaign_id_list": ",".join(batch)
-                }).json()
-            
-                for c in (res_perf.get("response") or {}).get("campaign_list") or []:
-                    campaign_perf_map[str(c["campaign_id"])] = c
+                    # 3. AMBIL PERFORMANCE DATA
+                    path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
+                    params_perf = params_list.copy()
+                    params_perf.update({
+                        "campaign_id": c_id,
+                        "start_date": s_date,
+                        "end_date": e_date,
+                        "sign": generate_sign_full(path_perf, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                    })
+                    res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
+                    
+                    # Agregasi data performa (karena responnya list harian)
+                    perf_list = res_perf.get("response", [])
+                    total_imp = sum(d.get("impression", 0) for d in perf_list)
+                    total_cli = sum(d.get("clicks", 0) for d in perf_list)
+                    total_exp = sum(d.get("expense", 0) for d in perf_list)
+                    total_ord = sum(d.get("broad_order", 0) for d in perf_list)
+                    total_gmv = sum(d.get("broad_gmv", 0) for d in perf_list)
+                    
+                    direct_ord = sum(d.get("direct_order", 0) for d in perf_list)
+                    direct_gmv = sum(d.get("direct_gmv", 0) for d in perf_list)
+                    direct_sold = sum(d.get("direct_item_sold", 0) for d in perf_list)
+                    broad_sold = sum(d.get("broad_item_sold", 0) for d in perf_list)
 
-            settings_map = {}
+                    # Hitung Rasio
+                    ctr = (total_cli / total_imp * 100) if total_imp else 0
+                    cvr = (total_ord / total_cli * 100) if total_cli else 0
+                    acos = (total_exp / total_gmv * 100) if total_gmv else 0
 
-            for i in range(0, len(active_campaign_ids), 20):
-                batch = active_campaign_ids[i:i+20]
-            
-                path_info = "/api/v2/ads/get_product_level_campaign_setting_info"
-                sign_info = generate_sign_full(path_info, ts_now, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-            
-                res_info = requests.get(BASE_URL + path_info, params={
-                    "partner_id": int(PARTNER_ID),
-                    "timestamp": ts_now,
-                    "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID),
-                    "sign": sign_info,
-                    "campaign_id_list": ",".join(batch)
-                }).json()
-            
-                for s in (res_info.get("response") or {}).get("campaign_list") or []:
-                    settings_map[str(s["campaign_id"])] = s
+                    ads_rows.append({
+                        "Urutan": i + 1,
+                        "Nama Iklan": info.get("item_name", f"Campaign {c_id}"),
+                        "Status": info.get("status", "-"),
+                        "Jenis Iklan": "Product Ads",
+                        "Kode Produk": info.get("item_id"),
+                        "Tampilan Iklan": total_imp,
+                        "Mode Bidding": info.get("bidding_strategy", "-"),
+                        "Penempatan Iklan": "Pencarian/Serupa",
+                        "Tanggal Mulai": start_ads,
+                        "Tanggal Selesai": end_ads,
+                        "Dilihat": total_imp,
+                        "Jumlah Klik": total_cli,
+                        "Persentase Klik": f"{round(ctr, 2)}%",
+                        "Konversi": total_ord,
+                        "Konversi Langsung": direct_ord,
+                        "Tingkat konversi": f"{round(cvr, 2)}%",
+                        "Tingkat Konversi Langsung": f"{round((direct_ord/total_cli*100), 2) if total_cli else 0}%",
+                        "Biaya per Konversi": round(total_exp / total_ord, 2) if total_ord else 0,
+                        "Biaya per Konversi Langsung": round(total_exp / direct_ord, 2) if direct_ord else 0,
+                        "Produk Terjual": broad_sold,
+                        "Terjual Langsung": direct_sold,
+                        "Omzet Penjualan": total_gmv,
+                        "Penjualan Langsung (GMV Langsung)": direct_gmv,
+                        "Biaya": total_exp,
+                        "Efektifitas Iklan": round(total_gmv / total_exp, 2) if total_exp else 0,
+                        "Efektivitas Langsung": round(direct_gmv / total_exp, 2) if total_exp else 0,
+                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
+                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round((total_exp/direct_gmv*100), 2) if direct_gmv else 0}%",
+                        "Jumlah Produk Dilihat": total_imp,
+                        "Jumlah Klik Produk": total_cli,
+                        "Persentase Klik Produk": f"{round(ctr, 2)}%"
+                    })
+                    progress_bar.progress((i + 1) / len(campaign_ids))
 
-            rows = []
+                df_ads = pd.DataFrame(ads_rows)
+                st.success("✅ Data Iklan per Produk berhasil ditarik.")
+                st.dataframe(df_ads, use_container_width=True)
 
-            for idx, cid in enumerate(active_campaign_ids, 1):
-                perf = campaign_perf_map.get(cid, {})
-                setting = settings_map.get(cid, {})
-            
-                metrics = perf.get("metrics_list", [])
-            
-                imp = sum(m.get("impression", 0) for m in metrics)
-                clk = sum(m.get("clicks", 0) for m in metrics)
-                cost = sum(m.get("expense", 0) for m in metrics)
-                gmv = sum(m.get("broad_gmv", 0) for m in metrics)
-            
-                ctr = clk / imp * 100 if imp else 0
-                roas = gmv / cost if cost else 0
-            
-                rows.append({
-                    "Urutan": idx,
-                    "Nama Iklan": (
-                        setting.get("campaign_name")
-                        or setting.get("ad_name")
-                        or f"Campaign {cid}"
-                    ),
-                    "Status": "Berjalan",   # 🔥 karena muncul di performance
-                    "Jenis Iklan": "Iklan Produk",
-                    "Kode Produk": cid,
-                    "Tampilan Iklan": imp,
-                    "Jumlah Klik": clk,
-                    "Persentase Klik": f"{ctr:.2f}%",
-                    "Biaya": int(cost),
-                    "Omzet Penjualan": int(gmv),
-                    "Efektifitas Iklan": round(roas, 2)
-                })
-            df_ads = pd.DataFrame(rows)
-
-            # ===============================
-            # SIMPAN KE DATABASE & EXCEL
-            # ===============================
-            output_ads = io.BytesIO()
-            with pd.ExcelWriter(output_ads, engine="xlsxwriter") as writer:
-                df_ads.to_excel(writer, index=False, sheet_name="Data Iklan")
-
-            excel_ads_bytes = output_ads.getvalue()
-            range_ads_str = f"{start_ads} s/d {end_ads}"
-
-            save_report_to_db(
-                selected_shop_ads,
-                f"ADS {range_ads_str}",
-                excel_ads_bytes
-            )
-
-            st.success(f"✅ Berhasil menarik {len(df_ads)} baris data iklan.")
-            st.dataframe(df_ads, use_container_width=True)
-
-            st.download_button(
-                label="⬇️ Download Data Iklan (Excel)",
-                data=excel_ads_bytes,
-                file_name=f"Ads_{selected_shop_ads}_{start_ads}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+                # --- Simpan ke Database & Excel ---
+                output_ads = io.BytesIO()
+                with pd.ExcelWriter(output_ads, engine="xlsxwriter") as writer:
+                    df_ads.to_excel(writer, index=False, sheet_name="Data Iklan")
+                excel_bytes = output_ads.getvalue()
+                
+                save_report_to_db(selected_shop_ads, f"ADS {s_date} - {e_date}", excel_bytes)
+                
+                st.download_button("⬇️ Download Excel", excel_bytes, f"Ads_{s_date}.xlsx")
 
         # ===============================
         # RIWAYAT IKLAN
