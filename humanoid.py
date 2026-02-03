@@ -629,8 +629,8 @@ with tab4:
                     )
 
 with tab5:
-    st.header("📢 Data Iklan Keseluruhan (Per Produk)")
-    st.info("Menggabungkan data dari Campaign List, Setting Info, dan Daily Performance.")
+    st.header("📢 Data Iklan Keseluruhan (Shopee Ads)")
+    st.info("Mengambil data iklan menggunakan API Product Level (Campaign ID List, Setting Info, & Daily Performance).")
 
     if not shop_names:
         st.warning("Belum ada toko.")
@@ -648,11 +648,11 @@ with tab5:
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
 
-            # 🔥 FORMAT TANGGAL SESUAI DOKUMENTASI: DD-MM-YYYY
-            s_date = start_ads.strftime("%d-%m-%Y")
-            e_date = end_ads.strftime("%d-%m-%Y")
+            # 1. FORMAT TANGGAL DD-MM-YYYY (Sesuai Dokumentasi)
+            s_date_str = start_ads.strftime("%d-%m-%Y")
+            e_date_str = end_ads.strftime("%d-%m-%Y")
 
-            # 1. AMBIL DAFTAR CAMPAIGN ID
+            # 2. AMBIL SEMUA CAMPAIGN ID (v2.ads.get_product_level_campaign_id_list)
             path_list = "/api/v2/ads/get_product_level_campaign_id_list"
             ts = int(time.time())
             params_list = {
@@ -660,104 +660,133 @@ with tab5:
                 "timestamp": ts,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": generate_sign_full(path_list, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                "sign": generate_sign_full(path_list, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID),
+                "ad_type": "all",
+                "offset": 0,
+                "limit": 5000
             }
             res_list = requests.get(BASE_URL + path_list, params=params_list).json()
-            campaign_ids = res_list.get("response", {}).get("campaign_id_list", [])
-
-            if not campaign_ids:
-                st.warning("Tidak ada kampanye iklan ditemukan.")
+            campaign_entries = res_list.get("response", {}).get("campaign_list", [])
+            
+            if not campaign_entries:
+                st.warning("Tidak ada kampanye ditemukan.")
             else:
-                ads_rows = []
-                progress_bar = st.progress(0)
+                all_ids = [str(c["campaign_id"]) for c in campaign_entries]
                 
-                # Kita ambil data per campaign (Bisa dioptimalkan dengan batch jika API mendukung)
-                for i, c_id in enumerate(campaign_ids):
-                    # 2. AMBIL SETTING INFO (Untuk Nama & Item ID)
-                    path_info = "/api/v2/ads/get_product_level_campaign_setting_info"
-                    params_info = params_list.copy()
-                    params_info["campaign_id"] = c_id
-                    params_info["sign"] = generate_sign_full(path_info, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                    res_info = requests.get(BASE_URL + path_info, params=params_info).json()
-                    info = res_info.get("response", {})
+                # Split IDs ke dalam batch berisi 100 (Max limit dokumentasi)
+                batch_size = 100
+                id_batches = [all_ids[i:i + batch_size] for i in range(0, len(all_ids), batch_size)]
+                
+                final_results = []
+                progress_bar = st.progress(0)
 
-                    # 3. AMBIL PERFORMANCE DATA
+                for idx, batch in enumerate(id_batches):
+                    ids_str = ",".join(batch)
+                    
+                    # 3. AMBIL SETTING INFO (v2.ads.get_product_level_campaign_setting_info)
+                    path_set = "/api/v2/ads/get_product_level_campaign_setting_info"
+                    params_set = params_list.copy()
+                    params_set.update({
+                        "info_type_list": "1,2,3,4",
+                        "campaign_id_list": ids_str,
+                        "sign": generate_sign_full(path_set, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                    })
+                    res_set = requests.get(BASE_URL + path_set, params=params_set).json()
+                    settings_list = res_set.get("response", {}).get("campaign_list", [])
+                    settings_map = {str(s["campaign_id"]): s for s in settings_list}
+
+                    # 4. AMBIL PERFORMANCE (v2.ads.get_product_campaign_daily_performance)
                     path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
                     params_perf = params_list.copy()
                     params_perf.update({
-                        "campaign_id": c_id,
-                        "start_date": s_date,
-                        "end_date": e_date,
+                        "start_date": s_date_str,
+                        "end_date": e_date_str,
+                        "campaign_id_list": ids_str,
                         "sign": generate_sign_full(path_perf, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     })
                     res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
+                    # Respon performance berbentuk list di dalam response -> campaign_list
+                    perf_list = res_perf.get("response", {}).get("campaign_list", [])
+
+                    # 5. MERGE DATA
+                    for p_data in perf_list:
+                        cid = str(p_data["campaign_id"])
+                        s_info = settings_map.get(cid, {})
+                        common = s_info.get("common_info", {})
+                        
+                        # Agregasi Metrik dari metrics_list (Data Harian)
+                        m_list = p_data.get("metrics_list", [])
+                        t_imp = sum(m.get("impression", 0) for m in m_list)
+                        t_cli = sum(m.get("clicks", 0) for m in m_list)
+                        t_exp = sum(m.get("expense", 0) for m in m_list)
+                        t_gmv = sum(m.get("broad_gmv", 0) for m in m_list)
+                        t_ord = sum(m.get("broad_order", 0) for m in m_list)
+                        t_sold = sum(m.get("broad_order_amount", 0) for m in m_list)
+                        
+                        d_gmv = sum(m.get("direct_gmv", 0) for m in m_list)
+                        d_ord = sum(m.get("direct_order", 0) for m in m_list)
+                        d_sold = sum(m.get("direct_order_amount", 0) for m in m_list)
+
+                        # Kalkulasi Rasio
+                        ctr = (t_cli / t_imp * 100) if t_imp else 0
+                        cvr = (t_ord / t_cli * 100) if t_cli else 0
+                        acos = (t_exp / t_gmv * 100) if t_gmv else 0
+                        
+                        # Identifikasi Item ID
+                        # Jika manual, ambil dari item_id_list[0]. Jika auto, coba dari auto_product_ads_info.
+                        item_id = "-"
+                        if common.get("item_id_list"):
+                            item_id = common["item_id_list"][0]
+                        elif s_info.get("auto_product_ads_info"):
+                            item_id = s_info["auto_product_ads_info"][0].get("item_id", "-")
+
+                        final_results.append({
+                            "Nama Iklan": common.get("ad_name", p_data.get("ad_name")),
+                            "Status": common.get("campaign_status", "-"),
+                            "Jenis Iklan": f"{p_data.get('ad_type', '-')} ({p_data.get('campaign_placement', '-')})",
+                            "Kode Produk": item_id,
+                            "Tampilan Iklan": t_imp,
+                            "Mode Bidding": common.get("bidding_method", "-"),
+                            "Penempatan Iklan": common.get("campaign_placement", "-"),
+                            "Tanggal Mulai": start_ads,
+                            "Tanggal Selesai": end_ads,
+                            "Dilihat": t_imp,
+                            "Jumlah Klik": t_cli,
+                            "Persentase Klik": f"{round(ctr, 2)}%",
+                            "Konversi": t_ord,
+                            "Konversi Langsung": d_ord,
+                            "Tingkat konversi": f"{round(cvr, 2)}%",
+                            "Tingkat Konversi Langsung": f"{round((d_ord/t_cli*100), 2) if t_cli else 0}%",
+                            "Biaya per Konversi": round(t_exp / t_ord, 2) if t_ord else 0,
+                            "Biaya per Konversi Langsung": round(t_exp / d_ord, 2) if d_ord else 0,
+                            "Produk Terjual": t_sold,
+                            "Terjual Langsung": d_sold,
+                            "Omzet Penjualan": t_gmv,
+                            "Penjualan Langsung (GMV Langsung)": d_gmv,
+                            "Biaya": t_exp,
+                            "Efektifitas Iklan": round(t_gmv / t_exp, 2) if t_exp else 0,
+                            "Efektivitas Langsung": round(d_gmv / t_exp, 2) if t_exp else 0,
+                            "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
+                            "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round((t_exp/d_gmv*100), 2) if d_gmv else 0}%",
+                            "Jumlah Produk Dilihat": t_imp,
+                            "Jumlah Klik Produk": t_cli,
+                            "Persentase Klik Produk": f"{round(ctr, 2)}%"
+                        })
                     
-                    # Agregasi data performa (karena responnya list harian)
-                    perf_list = res_perf.get("response", [])
-                    total_imp = sum(d.get("impression", 0) for d in perf_list)
-                    total_cli = sum(d.get("clicks", 0) for d in perf_list)
-                    total_exp = sum(d.get("expense", 0) for d in perf_list)
-                    total_ord = sum(d.get("broad_order", 0) for d in perf_list)
-                    total_gmv = sum(d.get("broad_gmv", 0) for d in perf_list)
-                    
-                    direct_ord = sum(d.get("direct_order", 0) for d in perf_list)
-                    direct_gmv = sum(d.get("direct_gmv", 0) for d in perf_list)
-                    direct_sold = sum(d.get("direct_item_sold", 0) for d in perf_list)
-                    broad_sold = sum(d.get("broad_item_sold", 0) for d in perf_list)
+                    progress_bar.progress((idx + 1) / len(id_batches))
 
-                    # Hitung Rasio
-                    ctr = (total_cli / total_imp * 100) if total_imp else 0
-                    cvr = (total_ord / total_cli * 100) if total_cli else 0
-                    acos = (total_exp / total_gmv * 100) if total_gmv else 0
-
-                    ads_rows.append({
-                        "Urutan": i + 1,
-                        "Nama Iklan": info.get("item_name", f"Campaign {c_id}"),
-                        "Status": info.get("status", "-"),
-                        "Jenis Iklan": "Product Ads",
-                        "Kode Produk": info.get("item_id"),
-                        "Tampilan Iklan": total_imp,
-                        "Mode Bidding": info.get("bidding_strategy", "-"),
-                        "Penempatan Iklan": "Pencarian/Serupa",
-                        "Tanggal Mulai": start_ads,
-                        "Tanggal Selesai": end_ads,
-                        "Dilihat": total_imp,
-                        "Jumlah Klik": total_cli,
-                        "Persentase Klik": f"{round(ctr, 2)}%",
-                        "Konversi": total_ord,
-                        "Konversi Langsung": direct_ord,
-                        "Tingkat konversi": f"{round(cvr, 2)}%",
-                        "Tingkat Konversi Langsung": f"{round((direct_ord/total_cli*100), 2) if total_cli else 0}%",
-                        "Biaya per Konversi": round(total_exp / total_ord, 2) if total_ord else 0,
-                        "Biaya per Konversi Langsung": round(total_exp / direct_ord, 2) if direct_ord else 0,
-                        "Produk Terjual": broad_sold,
-                        "Terjual Langsung": direct_sold,
-                        "Omzet Penjualan": total_gmv,
-                        "Penjualan Langsung (GMV Langsung)": direct_gmv,
-                        "Biaya": total_exp,
-                        "Efektifitas Iklan": round(total_gmv / total_exp, 2) if total_exp else 0,
-                        "Efektivitas Langsung": round(direct_gmv / total_exp, 2) if total_exp else 0,
-                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
-                        "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round((total_exp/direct_gmv*100), 2) if direct_gmv else 0}%",
-                        "Jumlah Produk Dilihat": total_imp,
-                        "Jumlah Klik Produk": total_cli,
-                        "Persentase Klik Produk": f"{round(ctr, 2)}%"
-                    })
-                    progress_bar.progress((i + 1) / len(campaign_ids))
-
-                df_ads = pd.DataFrame(ads_rows)
-                st.success("✅ Data Iklan per Produk berhasil ditarik.")
+                df_ads = pd.DataFrame(final_results)
+                st.success(f"✅ Berhasil menarik {len(df_ads)} kampanye.")
                 st.dataframe(df_ads, use_container_width=True)
 
-                # --- Simpan ke Database & Excel ---
+                # Export Excel & Simpan DB
                 output_ads = io.BytesIO()
                 with pd.ExcelWriter(output_ads, engine="xlsxwriter") as writer:
                     df_ads.to_excel(writer, index=False, sheet_name="Data Iklan")
                 excel_bytes = output_ads.getvalue()
                 
-                save_report_to_db(selected_shop_ads, f"ADS {s_date} - {e_date}", excel_bytes)
-                
-                st.download_button("⬇️ Download Excel", excel_bytes, f"Ads_{s_date}.xlsx")
+                save_report_to_db(selected_shop_ads, f"ADS {s_date_str} - {e_date_str}", excel_bytes)
+                st.download_button("⬇️ Download Data Iklan (Excel)", excel_bytes, f"Ads_Report_{s_date_str}.xlsx")
 
         # ===============================
         # RIWAYAT IKLAN
