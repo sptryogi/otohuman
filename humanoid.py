@@ -150,29 +150,38 @@ def get_escrow_detail(order_sn, access_token, shop_id):
     r = requests.get(url, params=params).json()
     return r.get("response", {})
 
-def create_income_excel(df_income, df_service, df_processing, shop_name):
+def create_income_excel(df_inc, df_srv, df_prc, shop_name):
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        # 1. Sheet Summary (Sederhana)
-        summary_data = {
-            "Deskripsi": ["Total Pesanan", "Total Penghasilan Bersih", "Total Biaya Administrasi & Layanan"],
-            "Nilai": [
-                len(df_income),
-                df_income["Total Penghasilan"].sum() if not df_income.empty else 0,
-                (df_income["Biaya Administrasi"].sum() + df_income["Biaya Layanan"].sum()) if not df_income.empty else 0
-            ]
-        }
-        pd.DataFrame(summary_data).to_excel(writer, sheet_name='Summary', index=False)
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        # LOGIKA RINGKASAN (SHEET SUMMARY)
+        # Menghitung total sesuai rincian di screenshot
+        sum_pendapatan = df_inc["Harga Asli Produk"].sum() + df_inc["Total Diskon Produk"].sum()
+        sum_pengeluaran = df_inc["Biaya Administrasi"].sum() + df_inc["Biaya Layanan"].sum() + df_inc["Biaya Proses Pesanan"].sum()
         
-        # 2. Sheet Income
-        df_income.to_excel(writer, sheet_name='Income', index=False)
+        summary_rows = [
+            ["Rincian Laporan", ""],
+            ["Username (Penjual)", shop_name],
+            ["Dari", df_inc["Tanggal Dana Dilepaskan"].min()],
+            ["Ke", df_inc["Tanggal Dana Dilepaskan"].max()],
+            ["", ""],
+            ["Ringkasan Penghasilan", "Rp"],
+            ["1. Total Pendapatan", sum_pendapatan],
+            ["   Subtotal Pesanan", sum_pendapatan],
+            ["      Harga Asli Produk", df_inc["Harga Asli Produk"].sum()],
+            ["      Total Diskon Produk", df_inc["Total Diskon Produk"].sum()],
+            ["2. Total Pengeluaran", -sum_pengeluaran],
+            ["   Biaya Admin & Layanan", -sum_pengeluaran],
+            ["      Biaya Administrasi", -df_inc["Biaya Administrasi"].sum()],
+            ["      Biaya Layanan", -df_inc["Biaya Layanan"].sum()],
+            ["      Biaya Proses Pesanan", -df_inc["Biaya Proses Pesanan"].sum()],
+            ["3. Total yang Dilepas", df_inc["Total Penghasilan"].sum()]
+        ]
         
-        # 3. Sheet Service Fee Details
-        df_service.to_excel(writer, sheet_name='Service Fee Details', index=False)
-        
-        # 4. Sheet Order Processing Fee
-        df_processing.to_excel(writer, sheet_name='Order Processing Fee', index=False)
-        
+        pd.DataFrame(summary_rows).to_excel(writer, sheet_name='Summary', index=False, header=False)
+        df_inc.to_excel(writer, sheet_name='Income', index=False)
+        df_srv.to_excel(writer, sheet_name='Service Fee Details', index=False)
+        df_prc.to_excel(writer, sheet_name='Order Processing Fee', index=False)
+    
     return output.getvalue()
     
 # ===============================
@@ -472,7 +481,7 @@ with tab3:
 
 with tab4:
     st.header("💰 Laporan Income (Dana Dilepaskan)")
-    st.info("Tab ini menarik data berdasarkan tanggal dana masuk ke saldo penjual.")
+    st.info("Tab ini menarik data berdasarkan tanggal dana masuk ke saldo penjual dengan rincian biaya lengkap.")
     
     if not shop_names:
         st.warning("Belum ada toko.")
@@ -484,7 +493,7 @@ with tab4:
         with col_inc2:
             end_inc = st.date_input("Sampai Tanggal", datetime.date.today(), key="e_inc")
 
-        if st.button("📊 Generate Laporan Income"):
+        if st.button("📊 Generate Laporan Income Full Detail"):
             token_row = get_shop_token(selected_shop_inc)
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
@@ -520,68 +529,98 @@ with tab4:
                 status_inc = st.empty()
 
                 for idx, sn in enumerate(released_sns):
-                    status_inc.info(f"Mengolah Escrow: {sn}")
-                    time.sleep(0.3) # Anti limit
+                    status_inc.info(f"Mengolah Pesanan: {sn} ({idx+1}/{len(released_sns)})")
                     
-                    # Ambil Detail Escrow
+                    # A. Ambil Detail Escrow (Data Finansial)
                     esc = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                    income_info = esc.get("order_income_info", {})
+                    inc_api = esc.get("order_income_info", {})
                     
-                    # Ambil Detail Order (untuk info produk)
-                    # Catatan: Untuk performa, sebaiknya get_order_detail dipanggil per batch 50 SN
-                    # Tapi ini versi simpel agar mudah dipahami:
+                    # B. Ambil Detail Order (Data Produk & Customer)
                     path_dtl = "/api/v2/order/get_order_detail"
                     ts_dtl = int(time.time())
                     sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     p_dtl = {
                         "partner_id": PARTNER_ID, "timestamp": ts_dtl, "access_token": ACTIVE_ACCESS_TOKEN,
                         "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_dtl, "order_sn_list": sn,
-                        "response_optional_fields": "item_list,buyer_username,payment_method,create_time"
+                        "response_optional_fields": "item_list,buyer_username,payment_method,create_time,shipping_carrier"
                     }
-                    ord_dtl = requests.get(BASE_URL + path_dtl, params=p_dtl).json().get("response", {}).get("order_list", [{}])[0]
+                    ord_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
+                    ord_dtl = ord_res.get("response", {}).get("order_list", [{}])[0]
 
-                    # MAPPING SHEET INCOME
+                    # 2. MAPPING SHEET INCOME (Semua Kolom Sesuai Request)
                     income_rows.append({
                         "No.": idx + 1,
                         "No. Pesanan": sn,
+                        "No. Pengajuan": "", 
                         "Username (Pembeli)": ord_dtl.get("buyer_username"),
                         "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S'),
                         "Metode pembayaran pembeli": ord_dtl.get("payment_method"),
                         "Tanggal Dana Dilepaskan": pd.to_datetime(esc.get("release_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if esc.get("release_time") else "",
-                        "Harga Asli Produk": income_info.get("original_cost_of_goods_sold", 0),
-                        "Total Diskon Produk": income_info.get("seller_vouchers", 0),
-                        "Biaya Administrasi": income_info.get("commission_fee", 0),
-                        "Biaya Layanan": income_info.get("service_fee", 0),
-                        "Biaya Transaksi": income_info.get("seller_transaction_fee", 0),
-                        "Total Penghasilan": income_info.get("escrow_amount", 0),
-                        "Jasa Kirim": ord_dtl.get("shipping_carrier")
+                        "Harga Asli Produk": inc_api.get("original_cost_of_goods_sold", 0),
+                        "Total Diskon Produk": inc_api.get("seller_vouchers", 0),
+                        "Jumlah Pengembalian Dana ke Pembeli": inc_api.get("is_return_refund", 0),
+                        "Diskon Produk dari Shopee": inc_api.get("shopee_vouchers", 0),
+                        "Voucher dari Penjual": inc_api.get("voucher_from_seller", 0),
+                        "Cashback Koin dari Penjual": inc_api.get("seller_coin_cash_back", 0),
+                        "Ongkir Dibayar Pembeli": inc_api.get("cost_of_goods_sold", 0),
+                        "Diskon Ongkir Ditanggung Jasa Kirim": 0,
+                        "Gratis Ongkir dari Shopee": inc_api.get("shopee_shipping_free_subsidies", 0),
+                        "Ongkir yang Diteruskan oleh Shopee ke Jasa Kirim": inc_api.get("actual_shipping_fee", 0),
+                        "Ongkos Kirim Pengembalian Barang": 0,
+                        "Kembali ke Biaya Pengiriman Pengirim": 0,
+                        "Pengembalian Biaya Kirim": 0,
+                        "Biaya Komisi AMS": 0,
+                        "Biaya Administrasi": inc_api.get("commission_fee", 0),
+                        "Biaya Layanan": inc_api.get("service_fee", 0),
+                        "Biaya Proses Pesanan": inc_api.get("seller_transaction_fee", 0),
+                        "Premi": 0,
+                        "Biaya Program Hemat Biaya Kirim": 0,
+                        "Biaya Transaksi": inc_api.get("seller_transaction_fee", 0),
+                        "Biaya Kampanye": 0,
+                        "Bea Masuk, PPN & PPh": 0,
+                        "Total Penghasilan": inc_api.get("escrow_amount", 0),
+                        "Kode Voucher": "",
+                        "Kompensasi": 0,
+                        "Promo Gratis Ongkir dari Penjual": inc_api.get("seller_shipping_fee", 0),
+                        "Jasa Kirim": ord_dtl.get("shipping_carrier"),
+                        "Nama Kurir": ord_dtl.get("shipping_carrier"),
+                        "Pengembalian Dana ke Pembeli": 0,
+                        "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": 0,
+                        "Pro-rata Voucher Shopee untuk Pengembalian Barang": 0,
+                        "Pro-rated Bank Payment Channel Promotion for return refund Items": 0,
+                        "Pro-rated Shopee Payment Channel Promotion for return refund Items": 0
                     })
 
-                    # MAPPING SHEET SERVICE FEE
+                    # 3. MAPPING SHEET SERVICE FEE DETAILS
                     service_rows.append({
                         "No.": idx + 1,
                         "No. Pesanan": sn,
-                        "Biaya Layanan Gratis Ongkir XTRA": income_info.get("service_fee", 0) # API Shopee biasanya menggabung ini di service_fee
+                        "Biaya Layanan Gratis Ongkir XTRA": inc_api.get("service_fee", 0)
                     })
 
-                    # MAPPING SHEET PROCESSING FEE
-                    for itm in ord_dtl.get("item_list", []):
+                    # 4. MAPPING SHEET ORDER PROCESSING FEE
+                    items = ord_dtl.get("item_list", [])
+                    total_fee = inc_api.get("seller_transaction_fee", 0)
+                    for itm in items:
                         processing_rows.append({
                             "No.": idx + 1,
                             "View By": "Order",
                             "No. Pesanan": sn,
                             "ID Produk": itm.get("item_id"),
                             "Nama Produk": itm.get("item_name"),
-                            "Biaya Proses Pesanan": income_info.get("order_chargeable_weight", 0), # Sesuaikan field API jika tersedia
+                            "Biaya Proses Pesanan": total_fee,
+                            "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": total_fee / len(items) if items else 0
                         })
                     
                     prog_inc.progress((idx + 1) / len(released_sns))
+                    time.sleep(0.3)
 
-                # Buat File Excel
+                # Finalisasi Data ke Excel
                 df_inc = pd.DataFrame(income_rows)
                 df_srv = pd.DataFrame(service_rows)
                 df_prc = pd.DataFrame(processing_rows)
                 
+                # Memanggil fungsi pembuat Excel (Summary + 3 Sheet lainnya)
                 excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc)
 
                 range_inc_str = f"{start_inc} s/d {end_inc}"
@@ -591,15 +630,16 @@ with tab4:
                     f"INCOME {range_inc_str}",
                     excel_file
                 )
-                
+
                 st.success("✅ Laporan Income Berhasil Dibuat!")
                 st.download_button(
                     label="📥 Download Laporan Income (Excel)",
                     data=excel_file,
-                    file_name=f"Income_{selected_shop_inc}_{start_inc}.xlsx",
+                    file_name=f"Income_Full_{selected_shop_inc}_{start_inc}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
-
+                
+    
             st.divider()
             st.subheader("📜 Riwayat Laporan Income (Database)")
             
