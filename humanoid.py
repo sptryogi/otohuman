@@ -643,6 +643,20 @@ with tab5:
         with col_ad2:
             end_ads = st.date_input("Sampai Tanggal", datetime.date.today() - datetime.timedelta(days=1), key="e_ads")
 
+        status_map = {
+            "ongoing": "Berjalan",
+            "paused": "Dihentikan Sementara",
+            "ended": "Selesai",
+            "scheduled": "Dijadwalkan",
+            "deleted": "Dihapus"
+        }
+        
+        placement_map = {
+            "all": "Semua Penempatan",
+            "search": "Iklan Pencarian",
+            "discovery": "Iklan Produk Serupa"
+        }
+
         if st.button("📊 Tarik Data Iklan"):
             token_row = get_shop_token(selected_shop_ads)
             ACTIVE_SHOP_ID = token_row["shop_id"]
@@ -714,7 +728,24 @@ with tab5:
                         s_info = settings_map.get(cid, {})
                         common = s_info.get("common_info", {})
                         
-                        # Agregasi Metrik dari metrics_list (Data Harian)
+                        # 1. FILTER STATUS (Hanya ambil yang 'Berjalan' jika ingin bersih, 
+                        # atau biarkan semua tapi dengan nama Indonesia)
+                        raw_status = common.get("campaign_status", "-")
+                        status_indo = status_map.get(raw_status, raw_status)
+                        
+                        # Lewati jika Anda HANYA ingin yang aktif (opsional)
+                        # if raw_status != "ongoing": continue 
+                    
+                        # 2. LOGIKA MODE BIDDING (Agar muncul 'GMV Max Auto' atau 'Manual')
+                        bidding_method = common.get("bidding_method", "")
+                        if bidding_method == "auto":
+                            mode_bidding = "GMV Max Auto"
+                        elif bidding_method == "manual":
+                            mode_bidding = "Manual"
+                        else:
+                            mode_bidding = "-"
+                    
+                        # 3. AGREGASI METRIK (Tetap seperti sebelumnya)
                         m_list = p_data.get("metrics_list", [])
                         t_imp = sum(m.get("impression", 0) for m in m_list)
                         t_cli = sum(m.get("clicks", 0) for m in m_list)
@@ -722,34 +753,28 @@ with tab5:
                         t_gmv = sum(m.get("broad_gmv", 0) for m in m_list)
                         t_ord = sum(m.get("broad_order", 0) for m in m_list)
                         t_sold = sum(m.get("broad_order_amount", 0) for m in m_list)
-                        
                         d_gmv = sum(m.get("direct_gmv", 0) for m in m_list)
                         d_ord = sum(m.get("direct_order", 0) for m in m_list)
                         d_sold = sum(m.get("direct_order_amount", 0) for m in m_list)
-
-                        # Kalkulasi Rasio
+                    
+                        # 4. KALKULASI RASIO (ACOS, ROAS, CTR)
                         ctr = (t_cli / t_imp * 100) if t_imp else 0
                         cvr = (t_ord / t_cli * 100) if t_cli else 0
                         acos = (t_exp / t_gmv * 100) if t_gmv else 0
-                        
-                        # Identifikasi Item ID
-                        # Jika manual, ambil dari item_id_list[0]. Jika auto, coba dari auto_product_ads_info.
-                        item_id = "-"
-                        if common.get("item_id_list"):
-                            item_id = common["item_id_list"][0]
-                        elif s_info.get("auto_product_ads_info"):
-                            item_id = s_info["auto_product_ads_info"][0].get("item_id", "-")
-
+                        roas = (t_gmv / t_exp) if t_exp else 0
+                    
+                        # 5. PENYUSUNAN BARIS DATA (Sesuai kolom target)
                         final_results.append({
+                            "Urutan": len(final_results) + 1,
                             "Nama Iklan": common.get("ad_name", p_data.get("ad_name")),
-                            "Status": common.get("campaign_status", "-"),
-                            "Jenis Iklan": f"{p_data.get('ad_type', '-')} ({p_data.get('campaign_placement', '-')})",
-                            "Kode Produk": item_id,
+                            "Status": status_indo, # Sekarang muncul 'Berjalan'
+                            "Jenis Iklan": "Iklan Produk", 
+                            "Kode Produk": common["item_id_list"][0] if common.get("item_id_list") else "-",
                             "Tampilan Iklan": t_imp,
-                            "Mode Bidding": common.get("bidding_method", "-"),
-                            "Penempatan Iklan": common.get("campaign_placement", "-"),
+                            "Mode Bidding": mode_bidding, # Sekarang muncul 'GMV Max Auto'
+                            "Penempatan Iklan": placement_map.get(common.get("campaign_placement"), "Semua Penempatan"),
                             "Tanggal Mulai": start_ads,
-                            "Tanggal Selesai": end_ads,
+                            "Tanggal Selesai": "Tidak Terbatas" if common.get("end_time") == 0 else end_ads,
                             "Dilihat": t_imp,
                             "Jumlah Klik": t_cli,
                             "Persentase Klik": f"{round(ctr, 2)}%",
@@ -761,10 +786,10 @@ with tab5:
                             "Biaya per Konversi Langsung": round(t_exp / d_ord, 2) if d_ord else 0,
                             "Produk Terjual": t_sold,
                             "Terjual Langsung": d_sold,
-                            "Omzet Penjualan": t_gmv,
-                            "Penjualan Langsung (GMV Langsung)": d_gmv,
-                            "Biaya": t_exp,
-                            "Efektifitas Iklan": round(t_gmv / t_exp, 2) if t_exp else 0,
+                            "Omzet Penjualan": round(t_gmv, 0),
+                            "Penjualan Langsung (GMV Langsung)": round(d_gmv, 0),
+                            "Biaya": round(t_exp, 0),
+                            "Efektifitas Iklan": round(roas, 2),
                             "Efektivitas Langsung": round(d_gmv / t_exp, 2) if t_exp else 0,
                             "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
                             "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round((t_exp/d_gmv*100), 2) if d_gmv else 0}%",
