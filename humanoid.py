@@ -842,7 +842,7 @@ with tab5:
 
 with tab6:
     st.header("🔁 Seller Conversion")
-    st.info("Menarik data seller conversion / affiliate conversion dalam periode tertentu.")
+    st.info("Menarik data seller conversion / affiliate conversion menggunakan API AMS Shopee.")
 
     if not shop_names:
         st.warning("Belum ada toko.")
@@ -857,139 +857,152 @@ with tab6:
 
         if st.button("📊 Tarik Seller Conversion"):
             token_row = get_shop_token(selected_shop_conv)
-            ACTIVE_SHOP_ID = token_row["shop_id"]
-            ACTIVE_ACCESS_TOKEN = token_row["access_token"]
-
-            time_from = int(time.mktime(start_conv.timetuple()))
-            time_to = int(time.mktime(end_conv.timetuple())) + 86399
-
-            # ============================================
-            # BASE: Ambil Order (Sebagai Fallback Conversion)
-            # ============================================
-            path_list = "/api/v2/order/get_order_list"
-            ts_list = int(time.time())
-            sign_list = generate_sign_full(path_list, ts_list, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-
-            p_list = {
-                "partner_id": PARTNER_ID,
-                "timestamp": ts_list,
-                "access_token": ACTIVE_ACCESS_TOKEN,
-                "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_list,
-                "time_range_field": "create_time",
-                "time_from": time_from,
-                "time_to": time_to,
-                "page_size": 50
-            }
-
-            res_list = requests.get(BASE_URL + path_list, params=p_list).json()
-            order_sns = [o["order_sn"] for o in res_list.get("response", {}).get("order_list", [])]
-
-            if not order_sns:
-                st.warning("Tidak ada data conversion di periode ini.")
+            if not token_row:
+                st.error("Token tidak ditemukan.")
             else:
-                conv_rows = []
+                ACTIVE_SHOP_ID = token_row["shop_id"]
+                ACTIVE_ACCESS_TOKEN = token_row["access_token"]
+
+                # Konversi ke Timestamp (00:00:00 s/d 23:59:59)
+                time_from = int(time.mktime(start_conv.timetuple()))
+                time_to = int(time.mktime(end_conv.timetuple())) + 86399
+
+                # API Path untuk AMS Conversion Report
+                path_conv = "/api/v2/ams/get_conversion_report"
+                
+                all_conv_data = []
+                cursor = ""
+                has_more = True
+                
                 prog_conv = st.progress(0)
-                status_conv = st.empty()
+                status_text = st.empty()
+                
+                # Mapping Status agar sesuai Dashboard Indonesia
+                status_map = {
+                    "UNPAID": "Belum Dibayar",
+                    "READY_TO_SHIP": "Sedang Diproses",
+                    "PROCESSED": "Sedang Diproses",
+                    "SHIPPED": "Sedang Diproses",
+                    "COMPLETED": "Selesai",
+                    "CANCELLED": "Dibatalkan",
+                    "IN_CANCEL": "Dibatalkan",
+                    "TO_CONFIRM_RECEIVE": "Sedang Diproses"
+                }
 
-                for idx, sn in enumerate(order_sns, start=1):
-                    status_conv.info(f"Memproses Conversion Order: {sn}")
-                    time.sleep(0.3)
+                while has_more:
+                    ts_conv = int(time.time())
+                    sign_conv = generate_sign_full(path_conv, ts_conv, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
-                    # Ambil detail order
-                    path_dtl = "/api/v2/order/get_order_detail"
-                    ts_dtl = int(time.time())
-                    sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-
-                    p_dtl = {
+                    params = {
                         "partner_id": PARTNER_ID,
-                        "timestamp": ts_dtl,
+                        "timestamp": ts_conv,
                         "access_token": ACTIVE_ACCESS_TOKEN,
                         "shop_id": int(ACTIVE_SHOP_ID),
-                        "sign": sign_dtl,
-                        "order_sn_list": sn,
-                        "response_optional_fields": "item_list,order_status,create_time,finish_time"
+                        "sign": sign_conv,
+                        "purchase_time_from": time_from,
+                        "purchase_time_to": time_to,
+                        "page_size": 50,
+                        "cursor": cursor
                     }
 
-                    ord = requests.get(BASE_URL + path_dtl, params=p_dtl).json().get("response", {}).get("order_list", [{}])[0]
+                    try:
+                        resp = requests.get(BASE_URL + path_conv, params=params).json()
+                        
+                        if resp.get("error"):
+                            st.error(f"Error API: {resp.get('message')}")
+                            break
+                        
+                        res_data = resp.get("response", {})
+                        report_list = res_data.get("report_list", [])
+                        
+                        if not report_list:
+                            break
 
-                    for item in ord.get("item_list", []):
-                        conv_rows.append({
-                            "Kode Pesanan": sn,
-                            "Status Pesanan": ord.get("order_status"),
-                            "Status Terverifikasi": "Verified" if ord.get("order_status") == "COMPLETED" else "Pending",
-                            "Waktu Pesanan": pd.to_datetime(ord.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord.get("create_time") else "",
-                            "Waktu Pesanan Selesai": pd.to_datetime(ord.get("finish_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord.get("finish_time") else "",
-                            "Waktu Pesanan Terverifikasi": pd.to_datetime(ord.get("finish_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord.get("finish_time") else "",
-                            "Kode Produk": item.get("item_id"),
-                            "Nama Produk": item.get("item_name"),
-                            "ID Model": item.get("model_id"),
+                        for item in report_list:
+                            raw_status = item.get("order_status", "").upper()
+                            status_indo = status_map.get(raw_status, raw_status)
+                            
+                            # Logika Status Terverifikasi (Sesuai Sample: COMPLETED -> Verified)
+                            verified_status = "Verified" if raw_status == "COMPLETED" else "Belum Diverifikasi"
 
-                            # Kategori (tidak tersedia di Order API → placeholder)
-                            "L1 Kategori Global": "",
-                            "L2 Kategori Global": "",
-                            "L3 Kategori Global": "",
+                            # Helper format tanggal
+                            def fmt_ts(ts):
+                                if not ts or ts == 0: return ""
+                                return pd.to_datetime(ts, unit='s').strftime('%Y-%m-%d %H:%M:%S')
 
-                            # Promo & Affiliate (tidak tersedia → placeholder)
-                            "Kode Promo": "",
-                            "Harga(Rp)": item.get("model_discounted_price"),
-                            "Jumlah": item.get("model_quantity_purchased"),
-                            "Nama Affiliate": "",
-                            "Username Affiliate": "",
-                            "MCN Terhubung": "",
+                            # Mapping Field Sesuai File SellerConversionReport.csv
+                            all_conv_data.append({
+                                "Kode Pesanan": item.get("order_sn"),
+                                "Status Pesanan": status_indo,
+                                "Status Terverifikasi": verified_status,
+                                "Waktu Pesanan": fmt_ts(item.get("purchase_time")),
+                                "Waktu Pesanan Selesai": fmt_ts(item.get("finish_time")),
+                                "Waktu Pesanan Terverifikasi": fmt_ts(item.get("validation_time")),
+                                "Kode Produk": item.get("item_id"),
+                                "Nama Produk": item.get("item_name"),
+                                "ID Model": item.get("model_id"),
+                                "L1 Kategori Global": item.get("category_l1", ""),
+                                "L2 Kategori Global": item.get("category_l2", ""),
+                                "L3 Kategori Global": item.get("category_l3", ""),
+                                "Kode Promo": item.get("promo_code", ""),
+                                "Harga(Rp)": item.get("item_price", 0),
+                                "Jumlah": item.get("item_count", 0),
+                                "Nama Affiliate": item.get("affiliate_name", ""),
+                                "Username Affiliate": item.get("affiliate_username", ""),
+                                "MCN Terhubung": item.get("mcn_name", ""),
+                                "ID Komisi Pesanan": item.get("commission_id", ""),
+                                "Partner Promo": item.get("partner_promo", ""),
+                                "Jenis Promo": item.get("promo_type", ""),
+                                "Nilai Pembelian(Rp)": item.get("total_item_price", 0),
+                                "Jumlah Pengembalian(Rp)": item.get("refund_amount", 0),
+                                "Tipe Pesanan": "Pesanan Langsung" if item.get("order_type") == "DIRECT" else "Pesanan Tidak Langsung",
+                                "Estimasi Komisi per Produk(Rp)": item.get("item_commission", 0),
+                                "Estimasi Komisi Affiliate per Produk(Rp)": item.get("item_affiliate_commission", 0),
+                                "Persentase Komisi Affiliate per Produk": f"{item.get('item_affiliate_commission_rate', 0)}%",
+                                "Estimasi Komisi MCN per Produk(Rp)": item.get("item_mcn_commission", 0),
+                                "Persentase Komisi MCN per Produk": f"{item.get('item_mcn_commission_rate', 0)}%",
+                                "Estimasi Komisi per Pesanan(Rp)": item.get("order_commission", 0),
+                                "Estimasi Komisi Affiliate per Pesanan(Rp)": item.get("order_affiliate_commission", 0),
+                                "Estimasi Komisi MCN per Pesanan(Rp)": item.get("order_mcn_commission", 0),
+                                "Catatan Produk": item.get("product_note", ""),
+                                "Platform": item.get("platform", "Shopee"),
+                                "Pengeluaran(Rp)": item.get("total_expense", 0),
+                                "Status Pemotongan": item.get("deduction_status", ""),
+                                "Metode Pemotongan": item.get("deduction_method", ""),
+                                "Waktu Pemotongan": fmt_ts(item.get("deduction_time"))
+                            })
 
-                            # Commission (placeholder sampai Affiliate API aktif)
-                            "ID Komisi Pesanan": "",
-                            "Partner Promo": "",
-                            "Jenis Promo": "",
-                            "Nilai Pembelian(Rp)": item.get("model_discounted_price", 0) * item.get("model_quantity_purchased", 0),
-                            "Jumlah Pengembalian(Rp)": 0,
-                            "Tipe Pesanan": "Normal",
-                            "Estimasi Komisi per Produk(Rp)": 0,
-                            "Estimasi Komisi Affiliate per Produk(Rp)": 0,
-                            "Persentase Komisi Affiliate per Produk": 0,
-                            "Estimasi Komisi MCN per Produk(Rp)": 0,
-                            "Persentase Komisi MCN per Produk": 0,
-                            "Estimasi Komisi per Pesanan(Rp)": 0,
-                            "Estimasi Komisi Affiliate per Pesanan(Rp)": 0,
-                            "Estimasi Komisi MCN per Pesanan(Rp)": 0,
-                            "Catatan Produk": "",
-                            "Platform": "Shopee",
-                            "Pengeluaran(Rp)": 0,
-                            "Status Pemotongan": "",
-                            "Metode Pemotongan": "",
-                            "Waktu Pemotongan": ""
-                        })
+                        status_text.info(f"Mengambil data... (Total sementara: {len(all_conv_data)})")
+                        
+                        # Pagination: Jika next_cursor ada, lanjut ambil data berikutnya
+                        cursor = res_data.get("next_cursor", "")
+                        if not cursor or not res_data.get("has_next_page"):
+                            has_more = False
+                        
+                        time.sleep(0.4) # Jeda untuk menghindari rate limit
+                    except Exception as e:
+                        st.error(f"Gagal memproses API: {str(e)}")
+                        break
 
-                    prog_conv.progress(idx / len(order_sns))
+                if all_conv_data:
+                    df_conv = pd.DataFrame(all_conv_data)
+                    st.success(f"Berhasil menarik total {len(df_conv)} baris data.")
+                    st.dataframe(df_conv)
 
-                df_conv = pd.DataFrame(conv_rows)
+                    # Export ke Excel
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        df_conv.to_excel(writer, index=False, sheet_name='Seller Conversion')
+                    excel_data = output.getvalue()
 
-                # ===============================
-                # SIMPAN EXCEL
-                # ===============================
-                output_conv = io.BytesIO()
-                with pd.ExcelWriter(output_conv, engine="xlsxwriter") as writer:
-                    df_conv.to_excel(writer, index=False, sheet_name="Seller Conversion")
-
-                excel_conv_bytes = output_conv.getvalue()
-                range_conv_str = f"{start_conv} s/d {end_conv}"
-
-                save_report_to_db(
-                    selected_shop_conv,
-                    f"CONVERSION {range_conv_str}",
-                    excel_conv_bytes
-                )
-
-                st.success("✅ Seller Conversion berhasil dibuat & disimpan.")
-                st.dataframe(df_conv, use_container_width=True)
-
-                st.download_button(
-                    "⬇️ Download Seller Conversion (Excel)",
-                    excel_conv_bytes,
-                    f"Seller_Conversion_{selected_shop_conv}_{start_conv}.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+                    st.download_button(
+                        label="📥 Download Seller Conversion (Excel)",
+                        data=excel_data,
+                        file_name=f"Seller_Conversion_{selected_shop_conv}_{start_conv}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                else:
+                    st.warning("Tidak ada data conversion ditemukan untuk periode ini.")
 
         # ===============================
         # RIWAYAT CONVERSION
