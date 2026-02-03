@@ -734,7 +734,7 @@ with tab5:
                         status_indo = status_map.get(raw_status, raw_status)
                         
                         # Lewati jika Anda HANYA ingin yang aktif (opsional)
-                        # if raw_status != "ongoing": continue 
+                        if raw_status != "ongoing": continue 
                     
                         # 2. LOGIKA MODE BIDDING (Agar muncul 'GMV Max Auto' atau 'Manual')
                         bidding_method = common.get("bidding_method", "")
