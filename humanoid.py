@@ -546,37 +546,36 @@ with tab4:
             time_from = int(time.mktime(start_inc.timetuple()))
             time_to = int(time.mktime(end_inc.timetuple())) + 86399
             
-            status_text.info("🔍 Mengambil data Financial Report...")
+            status_text.info("🔍 Mengambil data Income Report...")
+
+            # KOMBINASI API 1: get_income_report (BETUL SESUAI API LIST ANDA)
+            path_income = "/api/v2/payment/get_income_report"
+            ts_income = int(time.time())
+            sign_income = generate_sign_full(path_income, ts_income, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             
-            # KOMBINASI API 1: Financial Report (lebih lengkap untuk income data)
-            path_financial = "/api/v2/finance/get_merchant_financial_report"
-            ts_financial = int(time.time())
-            sign_financial = generate_sign_full(path_financial, ts_financial, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-            
-            financial_params = {
+            income_params = {
                 "partner_id": PARTNER_ID,
-                "timestamp": ts_financial,
+                "timestamp": ts_income,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_financial,
-                "time_from": time_from,
-                "time_to": time_to,
-                "page_size": 100,
-                "financial_type": "RELEASED"  # Dana yang sudah dilepas
+                "sign": sign_income,
+                "start_time": time_from,
+                "end_time": time_to,
+                "page_size": 100
             }
             
-            all_financial_list = []
+            all_income_list = []
             cursor = ""
             while True:
-                financial_params["cursor"] = cursor
-                res_financial = requests.get(BASE_URL + path_financial, params=financial_params).json()
+                income_params["cursor"] = cursor
+                res_income = requests.get(BASE_URL + path_income, params=income_params).json()
                 
-                financial_data = res_financial.get("response", {}).get("financial_report_list", [])
-                all_financial_list.extend(financial_data)
+                income_data = res_income.get("response", {}).get("income_list", [])
+                all_income_list.extend(income_data)
                 
-                if not res_financial.get("response", {}).get("more", False):
+                if not res_income.get("response", {}).get("more", False):
                     break
-                cursor = res_financial.get("response", {}).get("next_cursor", "")
+                cursor = res_income.get("response", {}).get("next_cursor", "")
             
             if not all_financial_list:
                 status_text.info("🔍 Mengambil data Escrow sebagai fallback...")
