@@ -550,50 +550,34 @@ with tab4:
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
             
             all_sn_list = []
-            current_end_ts = int(time.mktime(end_inc.timetuple())) + 86399 # Akhir hari ini
+            time_from = int(time.mktime(start_inc.timetuple()))
+            time_to = int(time.mktime(end_inc.timetuple())) + 86399
             
-            prog_bar = st.progress(0)
-            status_text = st.empty()
+            path_escrow_list = "/api/v2/payment/get_escrow_list"
+            ts = int(time.time())
+            sign = generate_sign_full(path_escrow_list, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             
-            # Loop mundur 4 x 15 hari = 60 hari ke belakang
-            for i in range(4): 
-                # Hitung range waktu per chunk
-                t_end = current_end_ts - (i * 15 * 86400)
-                t_start = t_end - (15 * 86400)
+            params_esc = {
+                "partner_id": PARTNER_ID, "timestamp": ts, "access_token": ACTIVE_ACCESS_TOKEN,
+                "shop_id": int(ACTIVE_SHOP_ID), "sign": sign,
+                "release_time_from": time_from,
+                "release_time_to": time_to,
+                "page_size": 50
+            }
+
+            cursor = ""
+            while True:
+                params_esc["cursor"] = cursor
+                res_esc = requests.get(BASE_URL + path_escrow_list, params=params_esc).json()
+                escrow_data = res_esc.get("response", {}).get("escrow_list", [])
                 
-                status_text.info(f"⏳ Scanning periode order: {datetime.datetime.fromtimestamp(t_start).date()} s/d {datetime.datetime.fromtimestamp(t_end).date()}")
+                if escrow_data:
+                    for item in escrow_data:
+                        all_sn_list.append(item["order_sn"])
                 
-                path_ord = "/api/v2/order/get_order_list"
-                ts = int(time.time())
-                sign = generate_sign_full(path_ord, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                
-                params_ord = {
-                    "partner_id": PARTNER_ID, "timestamp": ts, "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign,
-                    "time_range_field": "create_time", 
-                    "time_from": int(t_start), 
-                    "time_to": int(t_end),
-                    "page_size": 100,
-                    "order_status": "COMPLETED" # Tambahkan filter COMPLETED agar lebih spesifik
-                }
-                
-                cursor = ""
-                while True:
-                    p_loop = params_ord.copy()
-                    p_loop["cursor"] = cursor
-                    try:
-                        res = requests.get(BASE_URL + path_ord, params=p_loop).json()
-                        orders = res.get("response", {}).get("order_list", [])
-                        
-                        if orders:
-                            for o in orders:
-                                all_sn_list.append(o["order_sn"])
-                        
-                        if not res.get("response", {}).get("more"):
-                            break
-                        cursor = res.get("response", {}).get("next_cursor")
-                    except Exception:
-                        break
+                if not res_esc.get("response", {}).get("more"):
+                    break
+                cursor = res_esc.get("response", {}).get("next_cursor")
                 
                 prog_bar.progress((i + 1) / 4)
 
