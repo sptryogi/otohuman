@@ -546,19 +546,19 @@ with tab4:
             time_from = int(time.mktime(start_inc.timetuple()))
             time_to = int(time.mktime(end_inc.timetuple())) + 86399
             
-            status_text.info("🔍 Mengambil data Income Report...")
+            status_text.info("🔍 Mengambil data Income Detail...")
 
-            # KOMBINASI API 1: get_income_report (BETUL SESUAI API LIST ANDA)
-            path_income = "/api/v2/payment/get_income_report"
-            ts_income = int(time.time())
-            sign_income = generate_sign_full(path_income, ts_income, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+            # API BENAR: get_income_detail (langsung kasih LIST DATA INCOME)
+            path_income_detail = "/api/v2/payment/get_income_detail"
+            ts_income_detail = int(time.time())
+            sign_income_detail = generate_sign_full(path_income_detail, ts_income_detail, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             
             income_params = {
                 "partner_id": PARTNER_ID,
-                "timestamp": ts_income,
+                "timestamp": ts_income_detail,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_income,
+                "sign": sign_income_detail,
                 "start_time": time_from,
                 "end_time": time_to,
                 "page_size": 100
@@ -568,16 +568,16 @@ with tab4:
             cursor = ""
             while True:
                 income_params["cursor"] = cursor
-                res_income = requests.get(BASE_URL + path_income, params=income_params).json()
+                res_income = requests.get(BASE_URL + path_income_detail, params=income_params).json()
                 
-                income_data = res_income.get("response", {}).get("income_list", [])
+                income_data = res_income.get("response", {}).get("income_detail_list", [])
                 all_income_list.extend(income_data)
                 
                 if not res_income.get("response", {}).get("more", False):
                     break
                 cursor = res_income.get("response", {}).get("next_cursor", "")
             
-            if not all_financial_list:
+            if not all_income_list:
                 status_text.info("🔍 Mengambil data Escrow sebagai fallback...")
                 # FALLBACK: Escrow List API
                 path_escrow_list = "/api/v2/payment/get_escrow_list"
