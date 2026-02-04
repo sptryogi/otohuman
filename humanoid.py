@@ -552,6 +552,9 @@ with tab4:
             all_sn_list = []
             time_from = int(time.mktime(start_inc.timetuple()))
             time_to = int(time.mktime(end_inc.timetuple())) + 86399
+
+            prog_bar = st.progress(0)
+            status_text = st.empty()
             
             path_escrow_list = "/api/v2/payment/get_escrow_list"
             ts = int(time.time())
@@ -579,8 +582,6 @@ with tab4:
                     break
                 cursor = res_esc.get("response", {}).get("next_cursor")
                 
-                prog_bar.progress((i + 1) / 4)
-
             # Hapus duplikat SN (jika ada irisan waktu)
             all_sn_list = list(set(all_sn_list))
 
@@ -690,12 +691,12 @@ with tab4:
                                 "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": t_fee / len(o_items) if o_items else 0
                             })
                     
-                    prog_bar.progress((idx + 1) / total_candidates)
+                    prog_bar.progress((idx + 1) / len(all_sn_list))
                     time.sleep(0.05) # Delay kecil biar aman
                 
                 status_text.empty()
                 if not income_rows:
-                    st.warning(f"Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc} (Dicheck dari {len(candidate_orders)} riwayat pesanan).")
+                    st.warning(f"Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc} (Dicheck dari {len(all_sn_list)} riwayat pesanan).")
                 else:
                     df_inc = pd.DataFrame(income_rows)
                     df_srv = pd.DataFrame(service_rows)
