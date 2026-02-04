@@ -595,40 +595,28 @@ with tab4:
                 
                 # --- FILTERING BERDASARKAN ESCROW RELEASE TIME ---
                 for idx, sn in enumerate(all_sn_list):
-                    status_text.text(f"Cek Dana Cair: {sn} ({idx+1}/{len(all_sn_list)})")
+                    status_text.text(f"Cek Detail Escrow: {sn} ({idx+1}/{len(all_sn_list)})")
                     
-                    # 1. Panggil Escrow Detail (Ini API paling krusial)
                     esc_res = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     oi = esc_res.get("response", {}).get("order_income", {})
                     
-                    # Cek Release Time
-                    # (Fallback ke create_time jika release_time kosong, tapi biasanya untuk COMPLETED pasti ada)
-                    release_ts = oi.get("escrow_release_time") or oi.get("release_time")
+                    # --- HAPUS BLOK 'IF START_INC <= RELEASE_DT' DI SINI ---
+                    # Karena all_sn_list sudah hasil filter tanggal dari API get_escrow_list, 
+                    # jadi semua yang ada di dalam list ini SUDAH PASTI VALID. langsung proses saja:
                     
-                    if not release_ts:
-                        continue 
-                        
-                    release_dt = datetime.datetime.fromtimestamp(release_ts).date()
-
-                    # 2. LOGIKA UTAMA: Apakah cair di range tanggal input user?
-                    if start_inc <= release_dt <= end_inc:
-                        valid_count += 1
-                        
-                        # Ambil Detail Order (Hanya untuk Nama & Kurir)
-                        path_dtl = "/api/v2/order/get_order_detail"
-                        ts_dtl = int(time.time())
-                        sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                        p_dtl = {
-                            "partner_id": PARTNER_ID, "timestamp": ts_dtl, "access_token": ACTIVE_ACCESS_TOKEN,
-                            "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_dtl, "order_sn_list": sn,
-                            "response_optional_fields": "item_list,buyer_username,create_time,shipping_carrier,payment_method"
-                        }
-                        dtl_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
-                        ord_dtl = dtl_res.get("response", {}).get("order_list", [{}])[0]
-
-                        # --- MAPPING DATA (Persis kode sebelumnya) ---
-                        # (Pastikan mapping kolom di sini sama persis dengan kode terakhir saya 
-                        #  yang sudah mengandung 'Pro-rated Bank Payment...' dsb)
+                    valid_count += 1
+                    
+                    # Tarik detail order untuk info pembeli/kurir
+                    path_dtl = "/api/v2/order/get_order_detail"
+                    ts_dtl = int(time.time())
+                    sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                    p_dtl = {
+                        "partner_id": PARTNER_ID, "timestamp": ts_dtl, "access_token": ACTIVE_ACCESS_TOKEN,
+                        "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_dtl, "order_sn_list": sn,
+                        "response_optional_fields": "item_list,buyer_username,create_time,shipping_carrier,payment_method"
+                    }
+                    dtl_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
+                    ord_dtl = dtl_res.get("response", {}).get("order_list", [{}])[0]
                         
                         # Contoh baris mapping (jangan diubah):
                         row = {
