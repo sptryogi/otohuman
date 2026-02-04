@@ -546,73 +546,67 @@ with tab4:
             time_from = int(time.mktime(start_inc.timetuple()))
             time_to = int(time.mktime(end_inc.timetuple())) + 86399
             
-            status_text.info("🔍 Mengambil data Income Detail...")
+            status_text.info("🔍 Mengambil data dari Income Detail API...")
 
-            # API BENAR: get_income_detail (langsung kasih LIST DATA INCOME)
-            path_income_detail = "/api/v2/payment/get_income_detail"
-            ts_income_detail = int(time.time())
-            sign_income_detail = generate_sign_full(path_income_detail, ts_income_detail, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+            # --- PENGGUNAAN API BARU: get_income_detail ---
+            path_income = "/api/v2/payment/get_income_detail"
+            ts_income = int(time.time())
+            sign_income = generate_sign_full(path_income, ts_income, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             
+            # get_income_detail menggunakan format string YYYY-MM-DD untuk status Released
             income_params = {
                 "partner_id": PARTNER_ID,
-                "timestamp": ts_income_detail,
+                "timestamp": ts_income,
                 "access_token": ACTIVE_ACCESS_TOKEN,
                 "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_income_detail,
-                "start_time": time_from,
-                "end_time": time_to,
-                "page_size": 100
+                "sign": sign_income,
+                "date_from": start_inc.strftime('%Y-%m-%d'),
+                "date_to": end_inc.strftime('%Y-%m-%d'),
+                "income_status": 1, # 1 = Released (Lokal), 2 = Pending
+                "page_size": 30
             }
             
-            all_income_list = []
+            all_financial_list = [] # Kita gunakan nama ini agar sinkron dengan kode bawah Anda
             cursor = ""
+            
             while True:
                 income_params["cursor"] = cursor
-                res_income = requests.get(BASE_URL + path_income_detail, params=income_params).json()
+                res_income = requests.get(BASE_URL + path_income, params=income_params).json()
                 
+                # Mengambil list dari income_detail_list
                 income_data = res_income.get("response", {}).get("income_detail_list", [])
-                all_income_list.extend(income_data)
+                if income_data:
+                    all_financial_list.extend(income_data)
                 
-                if not res_income.get("response", {}).get("more", False):
+                # Cek pagination dari next_page -> cursor
+                next_cursor = res_income.get("response", {}).get("next_page", {}).get("cursor", "")
+                if not next_cursor:
                     break
-                cursor = res_income.get("response", {}).get("next_cursor", "")
-            
-            if not all_income_list:
-                status_text.info("🔍 Mengambil data Escrow sebagai fallback...")
-                # FALLBACK: Escrow List API
+                cursor = next_cursor
+
+            # FALLBACK: Jika get_income_detail kosong, coba Escrow List (Opsional tapi bagus untuk jaga-jaga)
+            if not all_financial_list:
+                status_text.info("🔍 Data detail kosong, mencoba Fallback Escrow List...")
                 path_escrow_list = "/api/v2/payment/get_escrow_list"
                 ts_list = int(time.time())
                 sign_list = generate_sign_full(path_escrow_list, ts_list, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                
                 p_esc_list = {
                     "partner_id": PARTNER_ID, "timestamp": ts_list, "access_token": ACTIVE_ACCESS_TOKEN,
                     "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_list,
                     "release_time_from": time_from, "release_time_to": time_to, "page_size": 50
                 }
-                
-                all_sn_list = []
                 cursor = ""
                 while True:
                     p_esc_list["cursor"] = cursor
                     res_esc = requests.get(BASE_URL + path_escrow_list, params=p_esc_list).json()
                     escrow_data = res_esc.get("response", {}).get("escrow_list", [])
-                    
                     if escrow_data:
                         for item in escrow_data:
-                            all_sn_list.append(item["order_sn"])
-                    
+                            # Kita bungkus jadi dict agar struktur loop di bawah tidak error
+                            all_financial_list.append({"order_sn": item["order_sn"]})
                     if not res_esc.get("response", {}).get("more"):
                         break
                     cursor = res_esc.get("response", {}).get("next_cursor")
-                
-                all_financial_list = all_sn_list
-            else:
-                all_sn_list = [item.get("order_sn", "") for item in all_financial_list if item.get("order_sn")]
-            
-            if not all_financial_list:
-                st.error(f"❌ Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc}.")
-            else:
-                income_rows, service_rows, processing_rows = [], [], []
                 
                 # 2. Proses setiap order dengan kombinasi API
                 for idx, order_data in enumerate(all_financial_list):
