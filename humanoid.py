@@ -583,7 +583,7 @@ with tab4:
                         "Username (Pembeli)": ord_dtl.get("buyer_username"),
                         "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S'),
                         "Metode pembayaran pembeli": ord_dtl.get("payment_method"),
-                        "Tanggal Dana Dilepaskan": pd.to_datetime(esc.get("release_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if esc.get("release_time") else "",
+                        "Tanggal Dana Dilepaskan": pd.to_datetime(inc_api.get("release_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if inc_api.get("release_time") else "",
                         "Harga Asli Produk": inc_api.get("original_cost_of_goods_sold", 0),
                         "Total Diskon Produk": inc_api.get("seller_discount", 0),
                         "Jumlah Pengembalian Dana ke Pembeli": inc_api.get("seller_return_refund", 0),
