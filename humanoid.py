@@ -670,11 +670,11 @@ with tab4:
                 excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc, str(start_inc), str(end_inc))
                 range_inc_str = f"{start_inc} s/d {end_inc}"
 
-                    save_report_to_db(
-                        selected_shop_inc,
-                        f"INCOME {range_inc_str}",
-                        excel_file
-                    )
+                save_report_to_db(
+                      selected_shop_inc,
+                    f"INCOME {range_inc_str}",
+                    excel_file
+                )
 
                 st.success(f"✅ Selesai! {len(df_inc)} data dana dilepaskan berhasil ditarik.")
                 st.download_button(
