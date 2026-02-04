@@ -520,7 +520,7 @@ with tab3:
 
 with tab4:
     st.header("💰 Laporan Income (Dana Dilepaskan)")
-    st.info("Data ini ditarik berdasarkan tanggal dana masuk ke Saldo Penjual (Escrow Released).")
+    st.info("Data ditarik berdasarkan tanggal dana masuk ke saldo (Released). Pastikan rentang tanggal sudah sesuai dengan di Seller Center.")
 
     if not shop_names:
         st.warning("Belum ada toko.")
@@ -529,6 +529,7 @@ with tab4:
         
         col_i1, col_i2 = st.columns(2)
         with col_i1:
+            # Kita default 7 hari ke belakang
             start_inc = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=7), key="dt_start_inc")
         with col_i2:
             end_inc = st.date_input("Sampai Tanggal", datetime.date.today(), key="dt_end_inc")
@@ -538,27 +539,29 @@ with tab4:
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
             
+            # --- MULAI PROSES ---
             prog_bar = st.progress(0)
             status_text = st.empty()
             
-            # --- 1. KONVERSI TANGGAL KE TIMESTAMP (00:00:00 s/d 23:59:59) ---
-            # Kita gunakan datetime combine agar jamnya tepat di awal dan akhir hari
-            dt_from = datetime.datetime.combine(start_inc, datetime.time.min)
-            dt_to = datetime.datetime.combine(end_inc, datetime.time.max)
-            
-            time_from = int(dt_from.timestamp())
-            time_to = int(dt_to.timestamp())
-            
-            status_text.info(f"🔍 Mencari pesanan cair antara {start_inc} s/d {end_inc}...")
-
-            # --- 2. AMBIL LIST PESANAN CAIR (get_escrow_list) ---
+            # 1. SIAPKAN VARIABEL (Mencegah NameError)
             all_sn_list = []
-            path_escrow_list = "/api/v2/payment/get_escrow_list"
-            cursor = ""
+            income_rows = []
+            service_rows = []
+            processing_rows = []
             
+            # 2. KONVERSI WAKTU KE TIMESTAMP (Gunakan range luas untuk amankan timezone)
+            # Shopee API pakai UTC, jadi kita ambil dari jam 00:00:00 H-1 sampai 23:59:59 H+1
+            time_from = int(time.mktime(start_inc.timetuple())) - 86400  # Mundur 1 hari
+            time_to = int(time.mktime(end_inc.timetuple())) + 172800   # Maju 1 hari
+            
+            status_text.info(f"🔍 Mencari data dana dilepaskan di sistem Shopee...")
+
+            # 3. AMBIL DAFTAR PESANAN CAIR (get_escrow_list)
+            path_esc = "/api/v2/payment/get_escrow_list"
+            cursor = ""
             while True:
                 ts = int(time.time())
-                sign = generate_sign_full(path_escrow_list, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                sign = generate_sign_full(path_esc, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                 params = {
                     "partner_id": PARTNER_ID, "timestamp": ts, "access_token": ACTIVE_ACCESS_TOKEN,
                     "shop_id": int(ACTIVE_SHOP_ID), "sign": sign,
@@ -566,34 +569,36 @@ with tab4:
                     "page_size": 50, "cursor": cursor
                 }
                 
-                res = requests.get(BASE_URL + path_escrow_list, params=params).json()
-                escrow_data = res.get("response", {}).get("escrow_list", [])
-                
-                if escrow_data:
-                    for item in escrow_data:
-                        all_sn_list.append(item["order_sn"])
-                
-                if not res.get("response", {}).get("more"):
-                    break
-                cursor = res.get("response", {}).get("next_cursor", "")
-
-            # --- 3. PROSES DETAIL (Jika SN ditemukan) ---
-            if not all_sn_list:
-                st.error(f"❌ Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc}. Pastikan di Seller Center pada tanggal tersebut memang ada 'Dana Dilepaskan'.")
-            else:
-                # Inisialisasi list agar tidak NameError
-                income_rows = []
-                service_rows = []
-                processing_rows = []
-                
-                for idx, sn in enumerate(all_sn_list):
-                    status_text.text(f"Mengambil detail dana: {sn} ({idx+1}/{len(all_sn_list)})")
+                try:
+                    res = requests.get(BASE_URL + path_esc, params=params).json()
+                    escrow_data = res.get("response", {}).get("escrow_list", [])
                     
-                    # Ambil Keuangan
+                    if escrow_data:
+                        for item in escrow_data:
+                            # Filter kembali di sini agar tanggalnya presisi sesuai input user
+                            r_date = datetime.datetime.fromtimestamp(item["release_time"]).date()
+                            if start_inc <= r_date <= end_inc:
+                                all_sn_list.append(item["order_sn"])
+                    
+                    if not res.get("response", {}).get("more"):
+                        break
+                    cursor = res.get("response", {}).get("next_cursor", "")
+                except Exception as e:
+                    st.error(f"Error saat tarik list: {e}")
+                    break
+
+            # 4. JIKA DATA DITEMUKAN, TARIK DETAILNYA
+            if not all_sn_list:
+                st.error(f"❌ Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc}. Coba cek di Seller Center apakah pada tanggal tsb statusnya memang 'Dilepaskan'.")
+            else:
+                for idx, sn in enumerate(all_sn_list):
+                    status_text.text(f"Mengolah Detail Pesanan: {sn} ({idx+1}/{len(all_sn_list)})")
+                    
+                    # A. Ambil Data Keuangan (Escrow Detail)
                     esc_res = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     oi = esc_res.get("response", {}).get("order_income", {})
                     
-                    # Ambil Detail Order (Buyer, Kurir, dll)
+                    # B. Ambil Detail Order (Buyer & Produk)
                     path_dtl = "/api/v2/order/get_order_detail"
                     ts_dtl = int(time.time())
                     sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
@@ -605,11 +610,11 @@ with tab4:
                     ord_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
                     ord_dtl = ord_res.get("response", {}).get("order_list", [{}])[0]
 
-                    # TANGGAL CAIR (Sesuai format UI: YYYY-MM-DD)
-                    release_dt_raw = oi.get("escrow_release_time")
-                    release_dt_str = pd.to_datetime(release_dt_raw, unit='s').strftime('%Y-%m-%d') if release_dt_raw else ""
+                    # Tanggal Released Format YYYY-MM-DD
+                    release_ts = oi.get("escrow_release_time")
+                    release_dt = pd.to_datetime(release_ts, unit='s').strftime('%Y-%m-%d') if release_ts else ""
 
-                    # --- MAPPING KOLOM (Persis Excel Shopee) ---
+                    # --- MAPPING 41 KOLOM EXACT ---
                     income_rows.append({
                         "No.": idx + 1,
                         "No. Pesanan": sn,
@@ -617,7 +622,7 @@ with tab4:
                         "Username (Pembeli)": ord_dtl.get("buyer_username", ""),
                         "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord_dtl.get("create_time") else "",
                         "Metode pembayaran pembeli": ord_dtl.get("payment_method", ""),
-                        "Tanggal Dana Dilepaskan": release_dt_str,
+                        "Tanggal Dana Dilepaskan": release_dt,
                         "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0),
                         "Total Diskon Produk": (oi.get("seller_discount", 0) + oi.get("shopee_discount", 0)) * -1,
                         "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
@@ -652,11 +657,19 @@ with tab4:
                         "Pro-rated Bank Payment Channel Promotion for return refund Items": 0,
                         "Pro-rated Shopee Payment Channel Promotion for return refund Items": 0
                     })
+
+                    # Sheet Service Fee & Processing Fee
+                    service_rows.append({"No.": idx + 1, "No. Pesanan": sn, "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", 0)})
                     
-                    # Sheet Service Fee
-                    service_rows.append({
-                        "No.": idx + 1, "No. Pesanan": sn, "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", 0)
-                    })
+                    items = ord_dtl.get("item_list", [])
+                    t_fee = oi.get("seller_transaction_fee", 0)
+                    for itm in items:
+                        processing_rows.append({
+                            "No.": idx + 1, "View By": "Order", "No. Pesanan": sn,
+                            "ID Produk": itm.get("item_id"), "Nama Produk": itm.get("item_name"),
+                            "Biaya Proses Pesanan": t_fee,
+                            "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": t_fee / len(items) if items else 0
+                        })
                     
                     prog_bar.progress((idx + 1) / len(all_sn_list))
 
