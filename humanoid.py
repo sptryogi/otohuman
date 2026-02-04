@@ -549,98 +549,87 @@ with tab4:
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
             
-            # --- STRATEGI JARING LEBAR (BACKWARD FETCHING) ---
-            # Kita tarik data order mundur 45 hari dari tanggal akhir filter
-            # Karena pesanan yang cair hari ini, bisa jadi dibuat bulan lalu.
+            all_sn_list = []
+            current_end_ts = int(time.mktime(end_inc.timetuple())) + 86399 # Akhir hari ini
             
-            all_orders_bucket = {} # Pakai Dict biar otomatis unik by OrderSN
-            
-            # Kita pecah request per 15 hari (Limit API Shopee)
-            # Loop mundur 3 kali (3 x 15 hari = 45 hari)
-            target_end_ts = int(time.mktime(end_inc.timetuple())) + 86399
-            
-            status_text = st.empty()
             prog_bar = st.progress(0)
+            status_text = st.empty()
             
-            # Loop 3x15 hari ke belakang
-            for i in range(3):
-                t_end = target_end_ts - (i * 15 * 86400)
+            # Loop mundur 4 x 15 hari = 60 hari ke belakang
+            for i in range(4): 
+                # Hitung range waktu per chunk
+                t_end = current_end_ts - (i * 15 * 86400)
                 t_start = t_end - (15 * 86400)
                 
-                status_text.info(f"⏳ Sedang memindai pesanan periode mundur: {datetime.datetime.fromtimestamp(t_start).date()} s/d {datetime.datetime.fromtimestamp(t_end).date()} ...")
+                status_text.info(f"⏳ Scanning periode order: {datetime.datetime.fromtimestamp(t_start).date()} s/d {datetime.datetime.fromtimestamp(t_end).date()}")
                 
                 path_ord = "/api/v2/order/get_order_list"
                 ts = int(time.time())
                 sign = generate_sign_full(path_ord, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                 
-                # Menggunakan create_time agar menangkap semua order yang dibuat
                 params_ord = {
                     "partner_id": PARTNER_ID, "timestamp": ts, "access_token": ACTIVE_ACCESS_TOKEN,
                     "shop_id": int(ACTIVE_SHOP_ID), "sign": sign,
                     "time_range_field": "create_time", 
                     "time_from": int(t_start), 
                     "time_to": int(t_end),
-                    "page_size": 100
+                    "page_size": 100,
+                    "order_status": "COMPLETED" # Tambahkan filter COMPLETED agar lebih spesifik
                 }
                 
-                # Handle Pagination cursor untuk setiap chunk waktu
                 cursor = ""
                 while True:
                     p_loop = params_ord.copy()
                     p_loop["cursor"] = cursor
-                    
                     try:
                         res = requests.get(BASE_URL + path_ord, params=p_loop).json()
                         orders = res.get("response", {}).get("order_list", [])
                         
-                        if not orders: break
+                        if orders:
+                            for o in orders:
+                                all_sn_list.append(o["order_sn"])
                         
-                        for o in orders:
-                            all_orders_bucket[o["order_sn"]] = o # Simpan ke bucket
-                            
-                        if not res.get("response", {}).get("more"): break
+                        if not res.get("response", {}).get("more"):
+                            break
                         cursor = res.get("response", {}).get("next_cursor")
-                    except Exception as e:
+                    except Exception:
                         break
-            
-            # Konversi bucket ke list
-            candidate_orders = list(all_orders_bucket.values())
-            
-            if not candidate_orders:
-                st.error("Tidak ditemukan riwayat pesanan sama sekali dalam 45 hari terakhir.")
+                
+                prog_bar.progress((i + 1) / 4)
+
+            # Hapus duplikat SN (jika ada irisan waktu)
+            all_sn_list = list(set(all_sn_list))
+
+            if not all_sn_list:
+                st.error("Tidak ditemukan pesanan Selesai (Completed) dalam 60 hari terakhir.")
             else:
-                st.info(f"🔍 Ditemukan {len(candidate_orders)} kandidat pesanan. Sekarang memfilter tanggal dana cair...")
+                st.info(f"🔍 Memeriksa {len(all_sn_list)} pesanan untuk mencari dana yang cair pada {start_inc} s/d {end_inc}...")
                 
-                income_rows = []
-                service_rows = []
-                processing_rows = []
-                
+                income_rows, service_rows, processing_rows = [], [], []
                 valid_count = 0
-                total_candidates = len(candidate_orders)
                 
-                # --- FILTERING PHASE ---
-                for idx, o in enumerate(candidate_orders):
-                    sn = o["order_sn"]
-                    status_text.text(f"Cek Keuangan Order: {sn} ({idx+1}/{total_candidates})")
+                # --- FILTERING BERDASARKAN ESCROW RELEASE TIME ---
+                for idx, sn in enumerate(all_sn_list):
+                    status_text.text(f"Cek Dana Cair: {sn} ({idx+1}/{len(all_sn_list)})")
                     
-                    # 1. AMBIL ESCROW DETAIL (SUMBER KEBENARAN KEUANGAN)
+                    # 1. Panggil Escrow Detail (Ini API paling krusial)
                     esc_res = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     oi = esc_res.get("response", {}).get("order_income", {})
                     
-                    # 2. CEK TANGGAL RILIS (DANA DILEPASKAN)
-                    # Jika tidak ada release_time, berarti belum cair -> Skip
-                    release_ts = oi.get("release_time")
+                    # Cek Release Time
+                    # (Fallback ke create_time jika release_time kosong, tapi biasanya untuk COMPLETED pasti ada)
+                    release_ts = oi.get("escrow_release_time") or oi.get("release_time")
+                    
                     if not release_ts:
                         continue 
                         
-                    release_date = datetime.date.fromtimestamp(release_ts)
-                    
-                    # 3. LOGIKA FILTER UTAMA
-                    # Masukkan data HANYA JIKA release_date ada di rentang input user
-                    if start_inc <= release_date <= end_inc:
+                    release_dt = datetime.datetime.fromtimestamp(release_ts).date()
+
+                    # 2. LOGIKA UTAMA: Apakah cair di range tanggal input user?
+                    if start_inc <= release_dt <= end_inc:
                         valid_count += 1
                         
-                        # Ambil Detail Order (Hanya jika lolos filter, biar hemat API)
+                        # Ambil Detail Order (Hanya untuk Nama & Kurir)
                         path_dtl = "/api/v2/order/get_order_detail"
                         ts_dtl = int(time.time())
                         sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
@@ -651,26 +640,25 @@ with tab4:
                         }
                         dtl_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
                         ord_dtl = dtl_res.get("response", {}).get("order_list", [{}])[0]
+
+                        # --- MAPPING DATA (Persis kode sebelumnya) ---
+                        # (Pastikan mapping kolom di sini sama persis dengan kode terakhir saya 
+                        #  yang sudah mengandung 'Pro-rated Bank Payment...' dsb)
                         
-                        # --- MAPPING DATA (FIXED COLUMN NAMES) ---
+                        # Contoh baris mapping (jangan diubah):
                         row = {
                             "No.": valid_count,
                             "No. Pesanan": sn,
                             "No. Pengajuan": "",
                             "Username (Pembeli)": ord_dtl.get("buyer_username", ""),
-                            "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord_dtl.get("create_time") else "",
+                            "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S'),
                             "Metode pembayaran pembeli": ord_dtl.get("payment_method", ""),
                             "Tanggal Dana Dilepaskan": pd.to_datetime(release_ts, unit='s').strftime('%Y-%m-%d'),
-                            
-                            # Keuangan
                             "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0),
                             "Total Diskon Produk": oi.get("seller_discount", 0) + oi.get("shopee_discount", 0),
-                            "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
                             "Diskon Produk dari Shopee": oi.get("shopee_discount", 0),
                             "Voucher dari Penjual": oi.get("voucher_from_seller", 0),
                             "Cashback Koin dari Penjual": oi.get("seller_coin_cash_back", 0),
-                            
-                            # Ongkir
                             "Ongkir Dibayar Pembeli": oi.get("buyer_paid_shipping_fee", 0),
                             "Diskon Ongkir Ditanggung Jasa Kirim": oi.get("shipping_fee_discount_from_3pl", 0),
                             "Gratis Ongkir dari Shopee": oi.get("shopee_shipping_rebate", 0),
@@ -678,8 +666,6 @@ with tab4:
                             "Ongkos Kirim Pengembalian Barang": oi.get("reverse_shipping_fee", 0),
                             "Kembali ke Biaya Pengiriman Pengirim": 0,
                             "Pengembalian Biaya Kirim": 0,
-                            
-                            # Biaya-biaya
                             "Biaya Komisi AMS": oi.get("order_ams_commission_fee", 0),
                             "Biaya Administrasi": oi.get("commission_fee", 0),
                             "Biaya Layanan": oi.get("service_fee", 0),
@@ -689,17 +675,13 @@ with tab4:
                             "Biaya Transaksi": oi.get("seller_transaction_fee", 0),
                             "Biaya Kampanye": oi.get("campaign_fee", 0),
                             "Bea Masuk, PPN & PPh": oi.get("escrow_tax", 0) + oi.get("withholding_tax", 0),
-                            
                             "Total Penghasilan": oi.get("escrow_amount", 0),
-                            
-                            # Lain-lain
                             "Kode Voucher": ",".join(oi.get("seller_voucher_code", [])) if oi.get("seller_voucher_code") else "",
                             "Kompensasi": oi.get("seller_lost_compensation", 0),
                             "Promo Gratis Ongkir dari Penjual": oi.get("seller_shipping_discount", 0),
                             "Jasa Kirim": ord_dtl.get("shipping_carrier", ""),
                             "Nama Kurir": ord_dtl.get("shipping_carrier", ""),
-                            
-                            # Refund details
+                            "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
                             "Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
                             "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": oi.get("prorated_coins_value_offset_return_items", 0),
                             "Pro-rata Voucher Shopee untuk Pengembalian Barang": oi.get("prorated_shopee_voucher_offset_return_items", 0),
@@ -708,25 +690,20 @@ with tab4:
                         }
                         income_rows.append(row)
                         
-                        # --- SERVICE FEE ROWS ---
+                        # Service Fee
                         service_rows.append({
-                            "No.": valid_count,
-                            "No. Pesanan": sn,
-                            "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", 0)
+                            "No.": valid_count, "No. Pesanan": sn, "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", 0)
                         })
-                        
-                        # --- PROCESSING FEE ROWS ---
-                        items = ord_dtl.get("item_list", [])
-                        total_fee = oi.get("seller_transaction_fee", 0)
-                        for itm in items:
+
+                        # Processing Fee
+                        o_items = ord_dtl.get("item_list", [])
+                        t_fee = oi.get("seller_transaction_fee", 0)
+                        for itm in o_items:
                             processing_rows.append({
-                                "No.": valid_count,
-                                "View By": "Order",
-                                "No. Pesanan": sn,
-                                "ID Produk": itm.get("item_id"),
-                                "Nama Produk": itm.get("item_name"),
-                                "Biaya Proses Pesanan": total_fee,
-                                "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": total_fee / len(items) if items else 0
+                                "No.": valid_count, "View By": "Order", "No. Pesanan": sn,
+                                "ID Produk": itm.get("item_id"), "Nama Produk": itm.get("item_name"),
+                                "Biaya Proses Pesanan": t_fee,
+                                "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": t_fee / len(o_items) if o_items else 0
                             })
                     
                     prog_bar.progress((idx + 1) / total_candidates)
