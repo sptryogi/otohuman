@@ -342,6 +342,25 @@ with tab3:
                 st.warning("Tidak ada pesanan.")
                 st.stop()
 
+            status_map_indo = {
+                "UNPAID": "Belum Bayar",
+                "READY_TO_SHIP": "Perlu Dikirim",
+                "PROCESSED": "Sedang Diproses", # Seringkali berarti sudah dipacking/atur pengiriman
+                "SHIPPED": "Dikirim",
+                "TO_CONFIRM_RECEIVE": "Sedang Dikirim", # Barang sudah di kurir, menunggu konfirmasi pembeli
+                "COMPLETED": "Selesai",
+                "IN_CANCEL": "Pengajuan Batal",
+                "CANCELLED": "Batal",
+                "TO_RETURN": "Pengajuan Pengembalian"
+            }
+
+            cancel_reason_map = {
+                "OUT_OF_STOCK": "Kehabisan Stok",
+                "CUSTOMER_REQUEST": "Permintaan Pembeli",
+                "UNDELIVERABLE_AREA": "Area Tidak Terjangkau",
+                "COD_NOT_SUPPORTED": "COD Tidak Didukung"
+            }
+
             # 2. DETAIL & FINANCE (ESCROW)
             rows = []
             progress_bar = st.progress(0)
@@ -375,6 +394,14 @@ with tab3:
                     esc = get_escrow_detail(order_sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     income_info = esc.get("order_income_info", {})
                     addr = o.get("recipient_address", {})
+
+                    # Terjemahkan Status
+                    raw_status = o.get("order_status")
+                    indo_status = status_map_indo.get(raw_status, raw_status) # Fallback ke raw jika tidak ada di map
+                    
+                    # Terjemahkan Alasan Batal
+                    raw_reason = o.get("cancel_reason")
+                    indo_reason = cancel_reason_map.get(raw_reason, raw_reason)
                     
                     for item in o.get("item_list", []):
                         qty = item.get("model_quantity_purchased", 0)
@@ -383,8 +410,8 @@ with tab3:
                         
                         rows.append({
                             "No. Pesanan": order_sn,
-                            "Status Pesanan": o.get("order_status"),
-                            "Alasan Pembatalan": o.get("cancel_reason"),
+                            "Status Pesanan": indo_status,
+                            "Alasan Pembatalan": indo_reason,
                             "Status Pembatalan/ Pengembalian": o.get("return_status"),
                             "No. Resi": o.get("tracking_number"),
                             "Opsi Pengiriman": o.get("shipping_carrier"),
