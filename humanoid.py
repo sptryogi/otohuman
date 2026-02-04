@@ -150,25 +150,25 @@ def get_escrow_detail(order_sn, access_token, shop_id):
     r = requests.get(url, params=params).json()
     return r.get("response", {})
 
-def create_income_excel(df_inc, df_srv, df_prc, shop_name):
+def create_income_excel(df_inc, df_srv, df_prc, shop_name, start_date, end_date): # Tambah param tgl
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # LOGIKA RINGKASAN (SHEET SUMMARY)
-        # Menghitung total sesuai rincian di screenshot
-        sum_pendapatan = df_inc["Harga Asli Produk"].sum() + df_inc["Total Diskon Produk"].sum()
+        # LOGIKA RINGKASAN
+        # Pastikan angka dihitung dari kolom yang benar
+        sum_pendapatan = df_inc["Harga Asli Produk"].sum() - df_inc["Total Diskon Produk"].sum()
         sum_pengeluaran = df_inc["Biaya Administrasi"].sum() + df_inc["Biaya Layanan"].sum() + df_inc["Biaya Proses Pesanan"].sum()
         
         summary_rows = [
             ["Rincian Laporan", ""],
             ["Username (Penjual)", shop_name],
-            ["Dari", df_inc["Tanggal Dana Dilepaskan"].min()],
-            ["Ke", df_inc["Tanggal Dana Dilepaskan"].max()],
+            ["Dari", start_date], # Gunakan parameter input
+            ["Ke", end_date],     # Gunakan parameter input
             ["", ""],
             ["Ringkasan Penghasilan", "Rp"],
             ["1. Total Pendapatan", sum_pendapatan],
             ["   Subtotal Pesanan", sum_pendapatan],
             ["      Harga Asli Produk", df_inc["Harga Asli Produk"].sum()],
-            ["      Total Diskon Produk", df_inc["Total Diskon Produk"].sum()],
+            ["      Total Diskon Produk", -df_inc["Total Diskon Produk"].sum()],
             ["2. Total Pengeluaran", -sum_pengeluaran],
             ["   Biaya Admin & Layanan", -sum_pengeluaran],
             ["      Biaya Administrasi", -df_inc["Biaya Administrasi"].sum()],
@@ -558,9 +558,10 @@ with tab4:
                 for idx, sn in enumerate(released_sns):
                     status_inc.info(f"Mengolah Pesanan: {sn} ({idx+1}/{len(released_sns)})")
                     
-                    # A. Ambil Detail Escrow (Data Finansial)
-                    esc = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                    inc_api = esc.get("order_income_info", {})
+                    # A. Ambil Detail Escrow (Data Finansial) 
+                    esc_res = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                    # PERBAIKAN: Key yang benar adalah 'order_income'
+                    inc_api = esc_res.get("response", {}).get("order_income", {})
                     
                     # B. Ambil Detail Order (Data Produk & Customer)
                     path_dtl = "/api/v2/order/get_order_detail"
@@ -584,14 +585,13 @@ with tab4:
                         "Metode pembayaran pembeli": ord_dtl.get("payment_method"),
                         "Tanggal Dana Dilepaskan": pd.to_datetime(esc.get("release_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if esc.get("release_time") else "",
                         "Harga Asli Produk": inc_api.get("original_cost_of_goods_sold", 0),
-                        "Total Diskon Produk": inc_api.get("seller_vouchers", 0),
-                        "Jumlah Pengembalian Dana ke Pembeli": inc_api.get("is_return_refund", 0),
-                        "Diskon Produk dari Shopee": inc_api.get("shopee_vouchers", 0),
+                        "Total Diskon Produk": inc_api.get("seller_discount", 0),
+                        "Jumlah Pengembalian Dana ke Pembeli": inc_api.get("seller_return_refund", 0),
+                        "Diskon Produk dari Shopee": inc_api.get("shopee_discount", 0),
                         "Voucher dari Penjual": inc_api.get("voucher_from_seller", 0),
                         "Cashback Koin dari Penjual": inc_api.get("seller_coin_cash_back", 0),
-                        "Ongkir Dibayar Pembeli": inc_api.get("cost_of_goods_sold", 0),
-                        "Diskon Ongkir Ditanggung Jasa Kirim": 0,
-                        "Gratis Ongkir dari Shopee": inc_api.get("shopee_shipping_free_subsidies", 0),
+                        "Ongkir Dibayar Pembeli": inc_api.get("buyer_paid_shipping_fee", 0),
+                        "Gratis Ongkir dari Shopee": inc_api.get("shopee_shipping_rebate", 0),
                         "Ongkir yang Diteruskan oleh Shopee ke Jasa Kirim": inc_api.get("actual_shipping_fee", 0),
                         "Ongkos Kirim Pengembalian Barang": 0,
                         "Kembali ke Biaya Pengiriman Pengirim": 0,
@@ -648,7 +648,7 @@ with tab4:
                 df_prc = pd.DataFrame(processing_rows)
                 
                 # Memanggil fungsi pembuat Excel (Summary + 3 Sheet lainnya)
-                excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc)
+                excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc, str(start_inc), str(end_inc))
 
                 range_inc_str = f"{start_inc} s/d {end_inc}"
 
