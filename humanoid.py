@@ -618,69 +618,68 @@ with tab4:
                     dtl_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
                     ord_dtl = dtl_res.get("response", {}).get("order_list", [{}])[0]
                         
-                        # Contoh baris mapping (jangan diubah):
-                        row = {
-                            "No.": valid_count,
-                            "No. Pesanan": sn,
-                            "No. Pengajuan": "",
-                            "Username (Pembeli)": ord_dtl.get("buyer_username", ""),
-                            "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S'),
-                            "Metode pembayaran pembeli": ord_dtl.get("payment_method", ""),
-                            "Tanggal Dana Dilepaskan": pd.to_datetime(release_ts, unit='s').strftime('%Y-%m-%d'),
-                            "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0),
-                            "Total Diskon Produk": oi.get("seller_discount", 0) + oi.get("shopee_discount", 0),
-                            "Diskon Produk dari Shopee": oi.get("shopee_discount", 0),
-                            "Voucher dari Penjual": oi.get("voucher_from_seller", 0),
-                            "Cashback Koin dari Penjual": oi.get("seller_coin_cash_back", 0),
-                            "Ongkir Dibayar Pembeli": oi.get("buyer_paid_shipping_fee", 0),
-                            "Diskon Ongkir Ditanggung Jasa Kirim": oi.get("shipping_fee_discount_from_3pl", 0),
-                            "Gratis Ongkir dari Shopee": oi.get("shopee_shipping_rebate", 0),
-                            "Ongkir yang Diteruskan oleh Shopee ke Jasa Kirim": oi.get("actual_shipping_fee", 0),
-                            "Ongkos Kirim Pengembalian Barang": oi.get("reverse_shipping_fee", 0),
-                            "Kembali ke Biaya Pengiriman Pengirim": 0,
-                            "Pengembalian Biaya Kirim": 0,
-                            "Biaya Komisi AMS": oi.get("order_ams_commission_fee", 0),
-                            "Biaya Administrasi": oi.get("commission_fee", 0),
-                            "Biaya Layanan": oi.get("service_fee", 0),
-                            "Biaya Proses Pesanan": oi.get("seller_transaction_fee", 0),
-                            "Premi": oi.get("delivery_seller_protection_fee_premium_amount", 0),
-                            "Biaya Program Hemat Biaya Kirim": 0,
-                            "Biaya Transaksi": oi.get("seller_transaction_fee", 0),
-                            "Biaya Kampanye": oi.get("campaign_fee", 0),
-                            "Bea Masuk, PPN & PPh": oi.get("escrow_tax", 0) + oi.get("withholding_tax", 0),
-                            "Total Penghasilan": oi.get("escrow_amount", 0),
-                            "Kode Voucher": ",".join(oi.get("seller_voucher_code", [])) if oi.get("seller_voucher_code") else "",
-                            "Kompensasi": oi.get("seller_lost_compensation", 0),
-                            "Promo Gratis Ongkir dari Penjual": oi.get("seller_shipping_discount", 0),
-                            "Jasa Kirim": ord_dtl.get("shipping_carrier", ""),
-                            "Nama Kurir": ord_dtl.get("shipping_carrier", ""),
-                            "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
-                            "Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
-                            "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": oi.get("prorated_coins_value_offset_return_items", 0),
-                            "Pro-rata Voucher Shopee untuk Pengembalian Barang": oi.get("prorated_shopee_voucher_offset_return_items", 0),
-                            "Pro-rated Bank Payment Channel Promotion  for return refund Items": oi.get("prorated_payment_channel_promo_bank_offset_return_items", 0),
-                            "Pro-rated Shopee Payment Channel Promotion  for return refund Items": oi.get("prorated_payment_channel_promo_shopee_offset_return_items", 0)
-                        }
-                        income_rows.append(row)
+                    # Contoh baris mapping (jangan diubah):
+                    row = {
+                        "No.": valid_count,
+                        "No. Pesanan": sn,
+                        "No. Pengajuan": "",
+                        "Username (Pembeli)": ord_dtl.get("buyer_username", ""),
+                        "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S'),
+                        "Metode pembayaran pembeli": ord_dtl.get("payment_method", ""),
+                        "Tanggal Dana Dilepaskan": pd.to_datetime(release_ts, unit='s').strftime('%Y-%m-%d'),
+                        "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0),
+                        "Total Diskon Produk": oi.get("seller_discount", 0) + oi.get("shopee_discount", 0),
+                        "Diskon Produk dari Shopee": oi.get("shopee_discount", 0),
+                        "Voucher dari Penjual": oi.get("voucher_from_seller", 0),
+                        "Cashback Koin dari Penjual": oi.get("seller_coin_cash_back", 0),
+                        "Ongkir Dibayar Pembeli": oi.get("buyer_paid_shipping_fee", 0),
+                        "Diskon Ongkir Ditanggung Jasa Kirim": oi.get("shipping_fee_discount_from_3pl", 0),
+                        "Gratis Ongkir dari Shopee": oi.get("shopee_shipping_rebate", 0),
+                        "Ongkir yang Diteruskan oleh Shopee ke Jasa Kirim": oi.get("actual_shipping_fee", 0),
+                        "Ongkos Kirim Pengembalian Barang": oi.get("reverse_shipping_fee", 0),
+                        "Kembali ke Biaya Pengiriman Pengirim": 0,
+                        "Pengembalian Biaya Kirim": 0,
+                        "Biaya Komisi AMS": oi.get("order_ams_commission_fee", 0),
+                        "Biaya Administrasi": oi.get("commission_fee", 0),
+                        "Biaya Layanan": oi.get("service_fee", 0),
+                        "Biaya Proses Pesanan": oi.get("seller_transaction_fee", 0),
+                        "Premi": oi.get("delivery_seller_protection_fee_premium_amount", 0),
+                        "Biaya Program Hemat Biaya Kirim": 0,
+                        "Biaya Transaksi": oi.get("seller_transaction_fee", 0),
+                        "Biaya Kampanye": oi.get("campaign_fee", 0),
+                        "Bea Masuk, PPN & PPh": oi.get("escrow_tax", 0) + oi.get("withholding_tax", 0),
+                        "Total Penghasilan": oi.get("escrow_amount", 0),
+                        "Kode Voucher": ",".join(oi.get("seller_voucher_code", [])) if oi.get("seller_voucher_code") else "",
+                        "Kompensasi": oi.get("seller_lost_compensation", 0),
+                        "Promo Gratis Ongkir dari Penjual": oi.get("seller_shipping_discount", 0),
+                        "Jasa Kirim": ord_dtl.get("shipping_carrier", ""),
+                        "Nama Kurir": ord_dtl.get("shipping_carrier", ""),
+                        "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
+                        "Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
+                        "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": oi.get("prorated_coins_value_offset_return_items", 0),
+                        "Pro-rata Voucher Shopee untuk Pengembalian Barang": oi.get("prorated_shopee_voucher_offset_return_items", 0),
+                        "Pro-rated Bank Payment Channel Promotion  for return refund Items": oi.get("prorated_payment_channel_promo_bank_offset_return_items", 0),                            "Pro-rated Shopee Payment Channel Promotion  for return refund Items": oi.get("prorated_payment_channel_promo_shopee_offset_return_items", 0)
+                    }
+                    income_rows.append(row)
                         
-                        # Service Fee
-                        service_rows.append({
-                            "No.": valid_count, "No. Pesanan": sn, "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", 0)
-                        })
+                    # Service Fee
+                    service_rows.append({
+                        "No.": valid_count, "No. Pesanan": sn, "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", 0)
+                    })
 
-                        # Processing Fee
-                        o_items = ord_dtl.get("item_list", [])
-                        t_fee = oi.get("seller_transaction_fee", 0)
-                        for itm in o_items:
-                            processing_rows.append({
-                                "No.": valid_count, "View By": "Order", "No. Pesanan": sn,
-                                "ID Produk": itm.get("item_id"), "Nama Produk": itm.get("item_name"),
-                                "Biaya Proses Pesanan": t_fee,
-                                "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": t_fee / len(o_items) if o_items else 0
-                            })
+                    # Processing Fee
+                    o_items = ord_dtl.get("item_list", [])
+                    t_fee = oi.get("seller_transaction_fee", 0)
+                    for itm in o_items:
+                        processing_rows.append({
+                            "No.": valid_count, "View By": "Order", "No. Pesanan": sn,
+                            "ID Produk": itm.get("item_id"), "Nama Produk": itm.get("item_name"),
+                            "Biaya Proses Pesanan": t_fee,
+                            "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": t_fee / len(o_items) if o_items else 0
+                        })
                     
-                    prog_bar.progress((idx + 1) / len(all_sn_list))
-                    time.sleep(0.05) # Delay kecil biar aman
+                prog_bar.progress((idx + 1) / len(all_sn_list))
+                time.sleep(0.05) # Delay kecil biar aman
                 
                 status_text.empty()
                 if not income_rows:
