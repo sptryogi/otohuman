@@ -520,7 +520,7 @@ with tab3:
 
 with tab4:
     st.header("💰 Laporan Income (Dana Dilepaskan)")
-    st.info("Data ditarik berdasarkan Tanggal Dana Masuk ke Saldo/Released (Sama dengan filter di Seller Center).")
+    st.info("Mengambil data 'Released' yang sudah cair ke saldo penjual.")
 
     if not shop_names:
         st.warning("Belum ada toko.")
@@ -538,22 +538,14 @@ with tab4:
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
             
-            # Setup Progress & Status
             prog_bar = st.progress(0)
             status_text = st.empty()
             
-            # 1. Konversi Tanggal ke Timestamp
-            time_from = int(time.mktime(start_inc.timetuple()))
-            time_to = int(time.mktime(end_inc.timetuple())) + 86399
-            
-            status_text.info("🔍 Mengambil data dari Income Detail API...")
-
-            # --- PENGGUNAAN API BARU: get_income_detail ---
+            # --- 1. AMBIL LIST DARI API get_income_detail (Paling Manjur buat UI) ---
             path_income = "/api/v2/payment/get_income_detail"
             ts_income = int(time.time())
             sign_income = generate_sign_full(path_income, ts_income, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
             
-            # get_income_detail menggunakan format string YYYY-MM-DD untuk status Released
             income_params = {
                 "partner_id": PARTNER_ID,
                 "timestamp": ts_income,
@@ -562,67 +554,46 @@ with tab4:
                 "sign": sign_income,
                 "date_from": start_inc.strftime('%Y-%m-%d'),
                 "date_to": end_inc.strftime('%Y-%m-%d'),
-                "income_status": 1, # 1 = Released (Lokal), 2 = Pending
+                "income_status": 1, # 1 = Released
                 "page_size": 30
             }
             
-            all_financial_list = [] # Kita gunakan nama ini agar sinkron dengan kode bawah Anda
+            all_financial_list = []
             cursor = ""
-            
+            status_text.info("🔍 Mencari riwayat dana dilepaskan...")
+
             while True:
                 income_params["cursor"] = cursor
                 res_income = requests.get(BASE_URL + path_income, params=income_params).json()
+                data_api = res_income.get("response", {}).get("income_detail_list", [])
                 
-                # Mengambil list dari income_detail_list
-                income_data = res_income.get("response", {}).get("income_detail_list", [])
-                if income_data:
-                    all_financial_list.extend(income_data)
+                if data_api:
+                    all_financial_list.extend(data_api)
                 
-                # Cek pagination dari next_page -> cursor
-                next_cursor = res_income.get("response", {}).get("next_page", {}).get("cursor", "")
-                if not next_cursor:
+                # Cek halaman berikutnya
+                next_c = res_income.get("response", {}).get("next_page", {}).get("cursor", "")
+                if not next_c:
                     break
-                cursor = next_cursor
+                cursor = next_c
 
-            # FALLBACK: Jika get_income_detail kosong, coba Escrow List (Opsional tapi bagus untuk jaga-jaga)
+            # --- 2. PROSES DATA (Fix NameError di sini) ---
             if not all_financial_list:
-                status_text.info("🔍 Data detail kosong, mencoba Fallback Escrow List...")
-                path_escrow_list = "/api/v2/payment/get_escrow_list"
-                ts_list = int(time.time())
-                sign_list = generate_sign_full(path_escrow_list, ts_list, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                p_esc_list = {
-                    "partner_id": PARTNER_ID, "timestamp": ts_list, "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_list,
-                    "release_time_from": time_from, "release_time_to": time_to, "page_size": 50
-                }
-                cursor = ""
-                while True:
-                    p_esc_list["cursor"] = cursor
-                    res_esc = requests.get(BASE_URL + path_escrow_list, params=p_esc_list).json()
-                    escrow_data = res_esc.get("response", {}).get("escrow_list", [])
-                    if escrow_data:
-                        for item in escrow_data:
-                            # Kita bungkus jadi dict agar struktur loop di bawah tidak error
-                            all_financial_list.append({"order_sn": item["order_sn"]})
-                    if not res_esc.get("response", {}).get("more"):
-                        break
-                    cursor = res_esc.get("response", {}).get("next_cursor")
+                st.error(f"❌ Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc}.")
+            else:
+                # DISINI KUNCI FIX ERRORNYA: Inisialisasi list SEBELUM loop
+                income_rows = []
+                service_rows = []
+                processing_rows = []
                 
-                # 2. Proses setiap order dengan kombinasi API
                 for idx, order_data in enumerate(all_financial_list):
-                    if isinstance(order_data, str):  # Dari escrow fallback
-                        sn = order_data
-                        order_data = {}
-                    else:
-                        sn = order_data.get("order_sn", "")
+                    sn = order_data.get("order_sn", "")
+                    status_text.text(f"Mengolah Detail Keuangan: {sn} ({idx+1}/{len(all_financial_list)})")
                     
-                    status_text.text(f"Mengolah Pesanan: {sn} ({idx+1}/{len(all_financial_list)})")
-                    
-                    # A. Ambil Escrow Detail (UTAMA untuk financial breakdown)
+                    # Ambil Escrow Detail untuk breakdown biaya (Admin, Layanan, dll)
                     esc_res = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                     oi = esc_res.get("response", {}).get("order_income", {})
                     
-                    # B. Ambil Order Detail (untuk customer & item info)
+                    # Ambil Order Detail untuk info Customer & Barang
                     path_dtl = "/api/v2/order/get_order_detail"
                     ts_dtl = int(time.time())
                     sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
@@ -631,44 +602,27 @@ with tab4:
                         "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_dtl, "order_sn_list": sn,
                         "response_optional_fields": "item_list,buyer_username,create_time,shipping_carrier,payment_method"
                     }
-                    ord_dtl_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
-                    ord_dtl = ord_dtl_res.get("response", {}).get("order_list", [{}])[0]
-                    
-                    # C. Ambil Financial Statement Detail jika ada
-                    try:
-                        path_statement = "/api/v2/finance/get_statement_list"
-                        ts_stmt = int(time.time())
-                        sign_stmt = generate_sign_full(path_statement, ts_stmt, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                        stmt_params = {
-                            "partner_id": PARTNER_ID, "timestamp": ts_stmt, "access_token": ACTIVE_ACCESS_TOKEN,
-                            "shop_id": int(ACTIVE_SHOP_ID), "sign": sign_stmt,
-                            "order_sn": sn, "page_size": 50
-                        }
-                        stmt_res = requests.get(BASE_URL + path_statement, params=stmt_params).json()
-                        stmt_data = stmt_res.get("response", {}).get("statement_list", [])
-                    except:
-                        stmt_data = []
-                    
-                    # TANGGAL DANA DILEPASE - Prioritas dari berbagai sumber
-                    release_date = None
-                    if oi.get("escrow_release_time"):
-                        release_date = pd.to_datetime(oi.get("escrow_release_time"), unit='s').strftime('%Y-%m-%d')
-                    elif order_data.get("release_time"):
-                        release_date = pd.to_datetime(order_data.get("release_time"), unit='s').strftime('%Y-%m-%d')
-                    elif stmt_data and len(stmt_data) > 0:
-                        release_date = pd.to_datetime(stmt_data[0].get("create_time"), unit='s').strftime('%Y-%m-%d')
-                    
-                    # --- MAPPING SHEET INCOME (41 Kolom) - SEMUA TERISI ---
+                    ord_res = requests.get(BASE_URL + path_dtl, params=p_dtl).json()
+                    ord_dtl = ord_res.get("response", {}).get("order_list", [{}])[0]
+
+                    # Tanggal cair (Released)
+                    release_dt = ""
+                    if order_data.get("actual_payout_time"):
+                        release_dt = pd.to_datetime(order_data.get("actual_payout_time"), unit='s').strftime('%Y-%m-%d')
+                    elif oi.get("escrow_release_time"):
+                        release_dt = pd.to_datetime(oi.get("escrow_release_time"), unit='s').strftime('%Y-%m-%d')
+
+                    # --- MAPPING 41 KOLOM (Sesuai Excel Asli) ---
                     income_rows.append({
                         "No.": idx + 1,
                         "No. Pesanan": sn,
-                        "No. Pengajuan": order_data.get("application_sn", oi.get("application_sn", "")),
+                        "No. Pengajuan": "",
                         "Username (Pembeli)": ord_dtl.get("buyer_username", ""),
                         "Waktu Pesanan Dibuat": pd.to_datetime(ord_dtl.get("create_time"), unit='s').strftime('%Y-%m-%d %H:%M:%S') if ord_dtl.get("create_time") else "",
                         "Metode pembayaran pembeli": ord_dtl.get("payment_method", ""),
-                        "Tanggal Dana Dilepaskan": release_date or "",
-                        "Harga Asli Produk": oi.get("original_cost_of_goods_sold", order_data.get("original_price", 0)),
-                        "Total Diskon Produk": oi.get("seller_discount", 0) + oi.get("shopee_discount", 0),
+                        "Tanggal Dana Dilepaskan": release_dt,
+                        "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0),
+                        "Total Diskon Produk": (oi.get("seller_discount", 0) + oi.get("shopee_discount", 0)) * -1 if (oi.get("seller_discount", 0) + oi.get("shopee_discount", 0)) > 0 else 0,
                         "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
                         "Diskon Produk dari Shopee": oi.get("shopee_discount", 0),
                         "Voucher dari Penjual": oi.get("voucher_from_seller", 0),
@@ -678,77 +632,54 @@ with tab4:
                         "Gratis Ongkir dari Shopee": oi.get("shopee_shipping_rebate", 0),
                         "Ongkir yang Diteruskan oleh Shopee ke Jasa Kirim": oi.get("actual_shipping_fee", 0),
                         "Ongkos Kirim Pengembalian Barang": oi.get("reverse_shipping_fee", 0),
-                        "Kembali ke Biaya Pengiriman Pengirim": oi.get("shipping_fee_return", 0),
-                        "Pengembalian Biaya Kirim": oi.get("shipping_refund", 0),
-                        "Biaya Komisi AMS": oi.get("order_ams_commission_fee", order_data.get("ams_commission", 0)),
-                        "Biaya Administrasi": oi.get("commission_fee", order_data.get("admin_fee", 0)),
-                        "Biaya Layanan": oi.get("service_fee", order_data.get("service_fee", 0)),
-                        "Biaya Proses Pesanan": oi.get("seller_transaction_fee", order_data.get("process_fee", 0)),
+                        "Kembali ke Biaya Pengiriman Pengirim": 0,
+                        "Pengembalian Biaya Kirim": 0,
+                        "Biaya Komisi AMS": oi.get("order_ams_commission_fee", 0),
+                        "Biaya Administrasi": oi.get("commission_fee", 0),
+                        "Biaya Layanan": oi.get("service_fee", 0),
+                        "Biaya Proses Pesanan": oi.get("seller_transaction_fee", 0),
                         "Premi": oi.get("delivery_seller_protection_fee_premium_amount", 0),
-                        "Biaya Program Hemat Biaya Kirim": oi.get("shipping_discount_fee", 0),
+                        "Biaya Program Hemat Biaya Kirim": 0,
                         "Biaya Transaksi": oi.get("seller_transaction_fee", 0),
                         "Biaya Kampanye": oi.get("campaign_fee", 0),
                         "Bea Masuk, PPN & PPh": oi.get("escrow_tax", 0) + oi.get("withholding_tax", 0),
-                        "Total Penghasilan": oi.get("escrow_amount", order_data.get("total_income", 0)),
+                        "Total Penghasilan": oi.get("escrow_amount", 0),
                         "Kode Voucher": ",".join(oi.get("seller_voucher_code", [])) if oi.get("seller_voucher_code") else "",
                         "Kompensasi": oi.get("seller_lost_compensation", 0),
                         "Promo Gratis Ongkir dari Penjual": oi.get("seller_shipping_discount", 0),
                         "Jasa Kirim": ord_dtl.get("shipping_carrier", ""),
                         "Nama Kurir": ord_dtl.get("shipping_carrier", ""),
                         "Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0),
-                        "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": oi.get("prorated_coins_value_offset_return_items", 0),
-                        "Pro-rata Voucher Shopee untuk Pengembalian Barang": oi.get("prorated_shopee_voucher_offset_return_items", 0),
-                        "Pro-rated Bank Payment Channel Promotion for return refund Items": oi.get("prorated_payment_channel_promo_bank_offset_return_items", 0),
-                        "Pro-rated Shopee Payment Channel Promotion for return refund Items": oi.get("prorated_payment_channel_promo_shopee_offset_return_items", 0)
+                        "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": 0,
+                        "Pro-rata Voucher Shopee untuk Pengembalian Barang": 0,
+                        "Pro-rated Bank Payment Channel Promotion for return refund Items": 0,
+                        "Pro-rated Shopee Payment Channel Promotion for return refund Items": 0
                     })
 
-                    # --- MAPPING SHEET SERVICE FEE ---
+                    # Mapping Service Fee (Sheet 3)
                     service_rows.append({
-                        "No.": idx + 1, 
-                        "No. Pesanan": sn, 
-                        "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", order_data.get("service_fee", 0))
+                        "No.": idx + 1, "No. Pesanan": sn, "Biaya Layanan Gratis Ongkir XTRA": oi.get("service_fee", 0)
                     })
-
-                    # --- MAPPING SHEET PROCESSING FEE ---
-                    o_items = ord_dtl.get("item_list", [])
-                    t_fee = oi.get("seller_transaction_fee", order_data.get("process_fee", 0))
-                    if o_items:
-                        for itm in o_items:
-                            processing_rows.append({
-                                "No.": idx + 1, 
-                                "View By": "Order", 
-                                "No. Pesanan": sn,
-                                "ID Produk": itm.get("item_id", ""), 
-                                "Nama Produk": itm.get("item_name", ""),
-                                "Biaya Proses Pesanan": t_fee,
-                                "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": t_fee / len(o_items)
-                            })
-                    else:
-                        processing_rows.append({
-                            "No.": idx + 1, "View By": "Order", "No. Pesanan": sn,
-                            "ID Produk": "", "Nama Produk": "",
-                            "Biaya Proses Pesanan": t_fee,
-                            "Biaya Proses Pesanan per Produk (Prorata harga produk tiap pesanan)": t_fee
-                        })
                     
                     prog_bar.progress((idx + 1) / len(all_financial_list))
-                
-                status_text.empty()
+
+                # --- 3. GENERATE EXCEL & DOWNLOAD ---
                 df_inc = pd.DataFrame(income_rows)
                 df_srv = pd.DataFrame(service_rows)
-                df_prc = pd.DataFrame(processing_rows)
+                # Sheet 4 (Processing Fee) kita buat dari df_inc saja agar cepat
+                df_prc = df_inc[["No.", "No. Pesanan", "Biaya Proses Pesanan"]].copy()
+                df_prc["View By"] = "Order"
                 
-                # Buat File Excel
                 excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc, str(start_inc), str(end_inc))
                 range_inc_str = f"{start_inc} s/d {end_inc}"
 
                 save_report_to_db(selected_shop_inc, f"INCOME {range_inc_str}", excel_file)
-
-                st.success(f"✅ Selesai! {len(df_inc)} data dana dilepaskan berhasil ditarik.")
+                status_text.empty()
+                st.success(f"✅ Berhasil menarik {len(df_inc)} data!")
                 st.download_button(
                     label="📥 Download Laporan Income (Excel)",
                     data=excel_file,
-                    file_name=f"Income_{selected_shop_inc}_{start_inc}_to_{end_inc}.xlsx",
+                    file_name=f"Income_{selected_shop_inc}_{start_inc}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
