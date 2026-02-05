@@ -1149,46 +1149,118 @@ with tab4:
         
 with tab5:
     st.header("📢 Data Iklan Keseluruhan (Shopee Ads)")
-    st.info("Mengambil data iklan menggunakan API Product Level (Campaign ID List, Setting Info, & Daily Performance).")
+    st.info("Mengambil data iklan menggunakan API Product Level dengan timezone WIB (UTC+7).")
 
     if not shop_names:
         st.warning("Belum ada toko.")
     else:
         selected_shop_ads = st.selectbox("Pilih Toko untuk Iklan", shop_names, key="shop_ads")
 
-        col_ad1, col_ad2 = st.columns(2)
-        with col_ad1:
-            start_ads = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=7), key="s_ads")
-        with col_ad2:
-            end_ads = st.date_input("Sampai Tanggal", datetime.date.today() - datetime.timedelta(days=1), key="e_ads")
+        # 🔴 PERBAIKAN: Pilihan range tanggal fleksibel
+        st.subheader("📅 Pilih Periode")
+        col_preset, col_custom = st.columns([1, 2])
+        
+        with col_preset:
+            preset_ads = st.selectbox(
+                "Preset Range",
+                ["Custom", "Hari Ini", "Kemarin", "7 Hari Terakhir", "Minggu Ini", 
+                 "Minggu Lalu", "Bulan Ini", "Bulan Lalu", "30 Hari Terakhir"],
+                key="preset_ads"
+            )
+        
+        # Set default dates berdasarkan preset
+        today = dt.date.today()
+        
+        if preset_ads == "Hari Ini":
+            default_start = today
+            default_end = today
+        elif preset_ads == "Kemarin":
+            default_start = today - dt.timedelta(days=1)
+            default_end = today - dt.timedelta(days=1)
+        elif preset_ads == "7 Hari Terakhir":
+            default_start = today - dt.timedelta(days=7)
+            default_end = today - dt.timedelta(days=1)  # Sampai kemarin
+        elif preset_ads == "30 Hari Terakhir":
+            default_start = today - dt.timedelta(days=30)
+            default_end = today - dt.timedelta(days=1)
+        elif preset_ads == "Minggu Ini":
+            # Senin minggu ini sampai hari ini/kemarin
+            default_start = today - dt.timedelta(days=today.weekday())
+            default_end = today - dt.timedelta(days=1) if today.weekday() > 0 else today
+        elif preset_ads == "Minggu Lalu":
+            # Senin sampai Minggu minggu lalu
+            default_start = today - dt.timedelta(days=today.weekday() + 7)
+            default_end = today - dt.timedelta(days=today.weekday() + 1)
+        elif preset_ads == "Bulan Ini":
+            default_start = today.replace(day=1)
+            default_end = today - dt.timedelta(days=1) if today.day > 1 else today
+        elif preset_ads == "Bulan Lalu":
+            last_month_end = today.replace(day=1) - dt.timedelta(days=1)
+            default_start = last_month_end.replace(day=1)
+            default_end = last_month_end
+        else:  # Custom
+            default_start = today - dt.timedelta(days=7)
+            default_end = today - dt.timedelta(days=1)
 
+        with col_custom:
+            col_ad1, col_ad2 = st.columns(2)
+            with col_ad1:
+                start_ads = st.date_input("Dari Tanggal", default_start, key="s_ads")
+            with col_ad2:
+                end_ads = st.date_input("Sampai Tanggal", default_end, key="e_ads")
+
+        # 🔴 PERBAIKAN: Validasi tanggal
+        if start_ads > end_ads:
+            st.error("❌ Tanggal mulai tidak boleh lebih besar dari tanggal akhir!")
+            st.stop()
+
+        # 🔴 PERBAIKAN: Info timezone
+        st.caption(f"🕐 Periode: {start_ads} s/d {end_ads} (WIB - UTC+7)")
+        
+        # Konversi ke format string untuk API (DD-MM-YYYY)
+        s_date_str = start_ads.strftime("%d-%m-%Y")
+        e_date_str = end_ads.strftime("%d-%m-%Y")
+
+        # Mapping untuk display
         status_map = {
             "ongoing": "Berjalan",
             "paused": "Dihentikan Sementara",
             "ended": "Selesai",
             "scheduled": "Dijadwalkan",
-            "deleted": "Dihapus"
+            "deleted": "Dihapus",
+            "unknown": "Tidak Diketahui"
         }
         
         placement_map = {
             "all": "Semua Penempatan",
             "search": "Iklan Pencarian",
-            "discovery": "Iklan Produk Serupa"
+            "discovery": "Iklan Produk Serupa",
+            "shop": "Iklan Toko",
+            "other": "Lainnya"
+        }
+        
+        bidding_map = {
+            "auto": "GMV Max Auto",
+            "manual": "Manual",
+            "": "-",
+            None: "-"
         }
 
-        if st.button("📊 Tarik Data Iklan"):
+        if st.button("📊 Tarik Data Iklan", type="primary"):
             token_row = get_shop_token(selected_shop_ads)
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
 
-            # 1. FORMAT TANGGAL DD-MM-YYYY (Sesuai Dokumentasi)
-            s_date_str = start_ads.strftime("%d-%m-%Y")
-            e_date_str = end_ads.strftime("%d-%m-%Y")
+            # Progress indicators
+            prog_bar = st.progress(0)
+            status_text = st.empty()
+            
+            status_text.info("🔍 Mengambil daftar campaign...")
 
-            # 2. AMBIL SEMUA CAMPAIGN ID (v2.ads.get_product_level_campaign_id_list)
+            # 1. AMBIL SEMUA CAMPAIGN ID
             path_list = "/api/v2/ads/get_product_level_campaign_id_list"
             ts = int(time.time())
-            params_list = {
+            params_base = {
                 "partner_id": int(PARTNER_ID),
                 "timestamp": ts,
                 "access_token": ACTIVE_ACCESS_TOKEN,
@@ -1198,139 +1270,288 @@ with tab5:
                 "offset": 0,
                 "limit": 5000
             }
-            res_list = requests.get(BASE_URL + path_list, params=params_list).json()
-            campaign_entries = res_list.get("response", {}).get("campaign_list", [])
+            
+            try:
+                res_list = requests.get(BASE_URL + path_list, params=params_base, timeout=30).json()
+                
+                if res_list.get("error"):
+                    st.error(f"❌ API Error (Campaign List): {res_list.get('message')}")
+                    st.stop()
+                
+                campaign_entries = res_list.get("response", {}).get("campaign_list", [])
+            except Exception as e:
+                st.error(f"❌ Error fetching campaign list: {str(e)}")
+                st.stop()
             
             if not campaign_entries:
-                st.warning("Tidak ada kampanye ditemukan.")
-            else:
-                all_ids = [str(c["campaign_id"]) for c in campaign_entries]
-                
-                # Split IDs ke dalam batch berisi 100 (Max limit dokumentasi)
-                batch_size = 100
-                id_batches = [all_ids[i:i + batch_size] for i in range(0, len(all_ids), batch_size)]
-                
-                final_results = []
-                progress_bar = st.progress(0)
+                st.warning("⚠️ Tidak ada kampanye ditemukan untuk toko ini.")
+                st.stop()
+            
+            st.success(f"✅ Ditemukan {len(campaign_entries)} campaign")
+            
+            # Prepare batches
+            all_ids = [str(c["campaign_id"]) for c in campaign_entries]
+            batch_size = 100
+            id_batches = [all_ids[i:i + batch_size] for i in range(0, len(all_ids), batch_size)]
+            
+            final_results = []
+            total_batches = len(id_batches)
 
-                for idx, batch in enumerate(id_batches):
-                    ids_str = ",".join(batch)
-                    
-                    # 3. AMBIL SETTING INFO (v2.ads.get_product_level_campaign_setting_info)
+            for idx, batch in enumerate(id_batches):
+                batch_num = idx + 1
+                status_text.info(f"📊 Memproses batch {batch_num}/{total_batches} ({len(batch)} campaign)...")
+                prog_bar.progress(min(idx / total_batches, 0.95))
+                
+                ids_str = ",".join(batch)
+                
+                try:
+                    # 2. AMBIL SETTING INFO
                     path_set = "/api/v2/ads/get_product_level_campaign_setting_info"
-                    params_set = params_list.copy()
-                    params_set.update({
+                    ts_set = int(time.time())
+                    params_set = {
+                        "partner_id": int(PARTNER_ID),
+                        "timestamp": ts_set,
+                        "access_token": ACTIVE_ACCESS_TOKEN,
+                        "shop_id": int(ACTIVE_SHOP_ID),
+                        "sign": generate_sign_full(path_set, ts_set, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID),
                         "info_type_list": "1,2,3,4",
-                        "campaign_id_list": ids_str,
-                        "sign": generate_sign_full(path_set, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                    })
-                    res_set = requests.get(BASE_URL + path_set, params=params_set).json()
+                        "campaign_id_list": ids_str
+                    }
+                    
+                    res_set = requests.get(BASE_URL + path_set, params=params_set, timeout=30).json()
+                    
+                    if res_set.get("error"):
+                        st.warning(f"⚠️ Error settings batch {batch_num}: {res_set.get('message')}")
+                        continue
+                    
                     settings_list = res_set.get("response", {}).get("campaign_list", [])
                     settings_map = {str(s["campaign_id"]): s for s in settings_list}
 
-                    # 4. AMBIL PERFORMANCE (v2.ads.get_product_campaign_daily_performance)
+                    # 3. AMBIL PERFORMANCE HARIAN
                     path_perf = "/api/v2/ads/get_product_campaign_daily_performance"
-                    params_perf = params_list.copy()
-                    params_perf.update({
+                    ts_perf = int(time.time())
+                    params_perf = {
+                        "partner_id": int(PARTNER_ID),
+                        "timestamp": ts_perf,
+                        "access_token": ACTIVE_ACCESS_TOKEN,
+                        "shop_id": int(ACTIVE_SHOP_ID),
+                        "sign": generate_sign_full(path_perf, ts_perf, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID),
                         "start_date": s_date_str,
                         "end_date": e_date_str,
-                        "campaign_id_list": ids_str,
-                        "sign": generate_sign_full(path_perf, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                    })
-                    res_perf = requests.get(BASE_URL + path_perf, params=params_perf).json()
-                    # Respon performance berbentuk list di dalam response -> campaign_list
+                        "campaign_id_list": ids_str
+                    }
+                    
+                    res_perf = requests.get(BASE_URL + path_perf, params=params_perf, timeout=30).json()
+                    
+                    if res_perf.get("error"):
+                        st.warning(f"⚠️ Error performance batch {batch_num}: {res_perf.get('message')}")
+                        continue
+                    
                     perf_list = res_perf.get("response", {}).get("campaign_list", [])
 
-                    # 5. MERGE DATA
+                    # 4. MERGE & PROCESS DATA
                     for p_data in perf_list:
-                        cid = str(p_data["campaign_id"])
-                        s_info = settings_map.get(cid, {})
-                        common = s_info.get("common_info", {})
-                        
-                        # 1. FILTER STATUS (Hanya ambil yang 'Berjalan' jika ingin bersih, 
-                        # atau biarkan semua tapi dengan nama Indonesia)
-                        raw_status = common.get("campaign_status", "-")
-                        status_indo = status_map.get(raw_status, raw_status)
-                        
-                        # Lewati jika Anda HANYA ingin yang aktif (opsional)
-                        if raw_status != "ongoing": continue 
-                    
-                        # 2. LOGIKA MODE BIDDING (Agar muncul 'GMV Max Auto' atau 'Manual')
-                        bidding_method = common.get("bidding_method", "")
-                        if bidding_method == "auto":
-                            mode_bidding = "GMV Max Auto"
-                        elif bidding_method == "manual":
-                            mode_bidding = "Manual"
-                        else:
-                            mode_bidding = "-"
-                    
-                        # 3. AGREGASI METRIK (Tetap seperti sebelumnya)
-                        m_list = p_data.get("metrics_list", [])
-                        t_imp = sum(m.get("impression", 0) for m in m_list)
-                        t_cli = sum(m.get("clicks", 0) for m in m_list)
-                        t_exp = sum(m.get("expense", 0) for m in m_list)
-                        t_gmv = sum(m.get("broad_gmv", 0) for m in m_list)
-                        t_ord = sum(m.get("broad_order", 0) for m in m_list)
-                        t_sold = sum(m.get("broad_order_amount", 0) for m in m_list)
-                        d_gmv = sum(m.get("direct_gmv", 0) for m in m_list)
-                        d_ord = sum(m.get("direct_order", 0) for m in m_list)
-                        d_sold = sum(m.get("direct_order_amount", 0) for m in m_list)
-                    
-                        # 4. KALKULASI RASIO (ACOS, ROAS, CTR)
-                        ctr = (t_cli / t_imp * 100) if t_imp else 0
-                        cvr = (t_ord / t_cli * 100) if t_cli else 0
-                        acos = (t_exp / t_gmv * 100) if t_gmv else 0
-                        roas = (t_gmv / t_exp) if t_exp else 0
-                    
-                        # 5. PENYUSUNAN BARIS DATA (Sesuai kolom target)
-                        final_results.append({
-                            "Urutan": len(final_results) + 1,
-                            "Nama Iklan": common.get("ad_name", p_data.get("ad_name")),
-                            "Status": status_indo, # Sekarang muncul 'Berjalan'
-                            "Jenis Iklan": "Iklan Produk", 
-                            "Kode Produk": common["item_id_list"][0] if common.get("item_id_list") else "-",
-                            "Tampilan Iklan": t_imp,
-                            "Mode Bidding": mode_bidding, # Sekarang muncul 'GMV Max Auto'
-                            "Penempatan Iklan": placement_map.get(common.get("campaign_placement"), "Semua Penempatan"),
-                            "Tanggal Mulai": start_ads,
-                            "Tanggal Selesai": "Tidak Terbatas" if common.get("end_time") == 0 else end_ads,
-                            "Dilihat": t_imp,
-                            "Jumlah Klik": t_cli,
-                            "Persentase Klik": f"{round(ctr, 2)}%",
-                            "Konversi": t_ord,
-                            "Konversi Langsung": d_ord,
-                            "Tingkat konversi": f"{round(cvr, 2)}%",
-                            "Tingkat Konversi Langsung": f"{round((d_ord/t_cli*100), 2) if t_cli else 0}%",
-                            "Biaya per Konversi": round(t_exp / t_ord, 2) if t_ord else 0,
-                            "Biaya per Konversi Langsung": round(t_exp / d_ord, 2) if d_ord else 0,
-                            "Produk Terjual": t_sold,
-                            "Terjual Langsung": d_sold,
-                            "Omzet Penjualan": round(t_gmv, 0),
-                            "Penjualan Langsung (GMV Langsung)": round(d_gmv, 0),
-                            "Biaya": round(t_exp, 0),
-                            "Efektifitas Iklan": round(roas, 2),
-                            "Efektivitas Langsung": round(d_gmv / t_exp, 2) if t_exp else 0,
-                            "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
-                            "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round((t_exp/d_gmv*100), 2) if d_gmv else 0}%",
-                            "Jumlah Produk Dilihat": t_imp,
-                            "Jumlah Klik Produk": t_cli,
-                            "Persentase Klik Produk": f"{round(ctr, 2)}%"
-                        })
-                    
-                    progress_bar.progress((idx + 1) / len(id_batches))
+                        try:
+                            cid = str(p_data.get("campaign_id", ""))
+                            if not cid:
+                                continue
+                                
+                            s_info = settings_map.get(cid, {})
+                            common = s_info.get("common_info", {})
+                            
+                            # Skip jika tidak ada common_info
+                            if not common:
+                                continue
+                            
+                            # Status dengan fallback
+                            raw_status = common.get("campaign_status", "unknown")
+                            status_indo = status_map.get(raw_status, raw_status)
+                            
+                            # Mode Bidding
+                            bidding_method = common.get("bidding_method", "")
+                            mode_bidding = bidding_map.get(bidding_method, bidding_method if bidding_method else "-")
+                            
+                            # Penempatan
+                            placement = common.get("campaign_placement", "all")
+                            placement_indo = placement_map.get(placement, placement)
+                            
+                            # Produk Info
+                            item_ids = common.get("item_id_list", [])
+                            kode_produk = str(item_ids[0]) if item_ids else "-"
+                            
+                            # Tanggal dengan WIB
+                            start_timestamp = common.get("start_time")
+                            end_timestamp = common.get("end_time")
+                            
+                            if start_timestamp:
+                                start_dt_wib = datetime.fromtimestamp(start_timestamp, pytz.UTC).astimezone(pytz.timezone('Asia/Jakarta'))
+                                tanggal_mulai = start_dt_wib.strftime('%Y-%m-%d')
+                            else:
+                                tanggal_mulai = start_ads.strftime('%Y-%m-%d')
+                            
+                            if end_timestamp and end_timestamp != 0:
+                                end_dt_wib = datetime.fromtimestamp(end_timestamp, pytz.UTC).astimezone(pytz.timezone('Asia/Jakarta'))
+                                tanggal_selesai = end_dt_wib.strftime('%Y-%m-%d')
+                            else:
+                                tanggal_selesai = "Tidak Terbatas"
+                            
+                            # Agregasi Metrik
+                            m_list = p_data.get("metrics_list", [])
+                            
+                            if not m_list:
+                                # Jika tidak ada metrics, skip atau isi dengan 0
+                                t_imp = t_cli = t_exp = t_gmv = t_ord = t_sold = d_gmv = d_ord = d_sold = 0
+                            else:
+                                t_imp = sum(m.get("impression", 0) or 0 for m in m_list)
+                                t_cli = sum(m.get("clicks", 0) or 0 for m in m_list)
+                                t_exp = sum(m.get("expense", 0) or 0 for m in m_list)
+                                t_gmv = sum(m.get("broad_gmv", 0) or 0 for m in m_list)
+                                t_ord = sum(m.get("broad_order", 0) or 0 for m in m_list)
+                                t_sold = sum(m.get("broad_order_amount", 0) or 0 for m in m_list)
+                                d_gmv = sum(m.get("direct_gmv", 0) or 0 for m in m_list)
+                                d_ord = sum(m.get("direct_order", 0) or 0 for m in m_list)
+                                d_sold = sum(m.get("direct_order_amount", 0) or 0 for m in m_list)
+                            
+                            # Kalkulasi Rasio (hindari division by zero)
+                            ctr = (t_cli / t_imp * 100) if t_imp > 0 else 0
+                            cvr = (t_ord / t_cli * 100) if t_cli > 0 else 0
+                            cvr_direct = (d_ord / t_cli * 100) if t_cli > 0 else 0
+                            acos = (t_exp / t_gmv * 100) if t_gmv > 0 else 0
+                            acos_direct = (t_exp / d_gmv * 100) if d_gmv > 0 else 0
+                            roas = (t_gmv / t_exp) if t_exp > 0 else 0
+                            roas_direct = (d_gmv / t_exp) if t_exp > 0 else 0
+                            cpc = (t_exp / t_cli) if t_cli > 0 else 0
+                            
+                            # Biaya per konversi
+                            biaya_per_konversi = (t_exp / t_ord) if t_ord > 0 else 0
+                            biaya_per_konversi_direct = (t_exp / d_ord) if d_ord > 0 else 0
+                            
+                            # 🔴 PERBAIKAN: Mapping lengkap 29 kolom
+                            row_data = {
+                                "Urutan": len(final_results) + 1,
+                                "Nama Iklan": common.get("ad_name", p_data.get("ad_name", "-")),
+                                "Status": status_indo,
+                                "Jenis Iklan": "Iklan Produk",
+                                "Kode Produk": kode_produk,
+                                "Tampilan Iklan": t_imp,
+                                "Mode Bidding": mode_bidding,
+                                "Penempatan Iklan": placement_indo,
+                                "Tanggal Mulai": tanggal_mulai,
+                                "Tanggal Selesai": tanggal_selesai,
+                                "Dilihat": t_imp,
+                                "Jumlah Klik": t_cli,
+                                "Persentase Klik": f"{round(ctr, 2)}%",
+                                "Konversi": t_ord,
+                                "Konversi Langsung": d_ord,
+                                "Tingkat konversi": f"{round(cvr, 2)}%",
+                                "Tingkat Konversi Langsung": f"{round(cvr_direct, 2)}%",
+                                "Biaya per Konversi": round(biaya_per_konversi, 2),
+                                "Biaya per Konversi Langsung": round(biaya_per_konversi_direct, 2),
+                                "Produk Terjual": t_sold,
+                                "Terjual Langsung": d_sold,
+                                "Omzet Penjualan": round(t_gmv, 0),
+                                "Penjualan Langsung (GMV Langsung)": round(d_gmv, 0),
+                                "Biaya": round(t_exp, 0),
+                                "Efektifitas Iklan": round(roas, 2),
+                                "Efektivitas Langsung": round(roas_direct, 2),
+                                "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
+                                "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round(acos_direct, 2)}%",
+                                "Jumlah Produk Dilihat": t_imp,
+                                "Jumlah Klik Produk": t_cli,
+                                "Persentase Klik Produk": f"{round(ctr, 2)}%"
+                            }
+                            
+                            final_results.append(row_data)
+                            
+                        except Exception as e:
+                            # Skip campaign yang error tapi lanjutkan yang lain
+                            continue
+                
+                except Exception as e:
+                    st.error(f"❌ Error batch {batch_num}: {str(e)}")
+                    continue
 
+            prog_bar.empty()
+            status_text.empty()
+
+            if not final_results:
+                st.error("❌ Tidak ada data iklan yang berhasil diproses.")
+                st.info("💡 Tips: Coba perpanjang range tanggal atau cek apakah ada campaign aktif.")
+            else:
+                # Buat DataFrame dengan kolom terurut
                 df_ads = pd.DataFrame(final_results)
-                st.success(f"✅ Berhasil menarik {len(df_ads)} kampanye.")
-                st.dataframe(df_ads, use_container_width=True)
-
-                # Export Excel & Simpan DB
+                
+                # 🔴 PERBAIKAN: Urutkan kolom sesuai permintaan
+                desired_columns = [
+                    "Urutan", "Nama Iklan", "Status", "Jenis Iklan", "Kode Produk",
+                    "Tampilan Iklan", "Mode Bidding", "Penempatan Iklan", "Tanggal Mulai",
+                    "Tanggal Selesai", "Dilihat", "Jumlah Klik", "Persentase Klik",
+                    "Konversi", "Konversi Langsung", "Tingkat konversi", "Tingkat Konversi Langsung",
+                    "Biaya per Konversi", "Biaya per Konversi Langsung", "Produk Terjual",
+                    "Terjual Langsung", "Omzet Penjualan", "Penjualan Langsung (GMV Langsung)",
+                    "Biaya", "Efektifitas Iklan", "Efektivitas Langsung",
+                    "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)",
+                    "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)",
+                    "Jumlah Produk Dilihat", "Jumlah Klik Produk", "Persentase Klik Produk"
+                ]
+                
+                # Filter hanya kolom yang ada
+                available_cols = [c for c in desired_columns if c in df_ads.columns]
+                df_ads = df_ads[available_cols]
+                
+                # Tampilkan statistik
+                total_biaya = df_ads["Biaya"].sum()
+                total_omzet = df_ads["Omzet Penjualan"].sum()
+                total_impression = df_ads["Dilihat"].sum()
+                total_klik = df_ads["Jumlah Klik"].sum()
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total Campaign", len(df_ads))
+                col2.metric("Total Biaya", f"Rp {total_biaya:,.0f}")
+                col3.metric("Total Omzet", f"Rp {total_omzet:,.0f}")
+                col4.metric("Total Klik", f"{total_klik:,.0f}")
+                
+                st.success(f"✅ Berhasil menarik {len(df_ads)} campaign dari {len(campaign_entries)} total campaign.")
+                
+                # Preview data
+                st.subheader("📋 Preview Data Iklan")
+                st.dataframe(df_ads, use_container_width=True, height=400)
+                
+                # Export Excel dengan formatting
                 output_ads = io.BytesIO()
-                with pd.ExcelWriter(output_ads, engine="xlsxwriter") as writer:
+                with pd.ExcelWriter(output_ads, engine="openpyxl") as writer:
                     df_ads.to_excel(writer, index=False, sheet_name="Data Iklan")
+                    
+                    # Auto-adjust columns
+                    worksheet = writer.sheets["Data Iklan"]
+                    for column in worksheet.columns:
+                        max_length = 0
+                        column_letter = column[0].column_letter
+                        for cell in column:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+                        adjusted_width = min(max_length + 2, 50)
+                        worksheet.column_dimensions[column_letter].width = adjusted_width
+                
                 excel_bytes = output_ads.getvalue()
                 
-                save_report_to_db(selected_shop_ads, f"ADS {s_date_str} - {e_date_str}", excel_bytes)
-                st.download_button("⬇️ Download Data Iklan (Excel)", excel_bytes, f"Ads_Report_{s_date_str}.xlsx")
+                # Simpan ke database
+                range_str = f"{start_ads} s/d {end_ads}"
+                save_report_to_db(selected_shop_ads, f"ADS {range_str}", excel_bytes)
+                
+                col_dl, col_info = st.columns([1, 3])
+                with col_dl:
+                    st.download_button(
+                        "⬇️ Download Excel", 
+                        excel_bytes, 
+                        f"Ads_Report_{selected_shop_ads}_{start_ads}_{end_ads}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                with col_info:
+                    st.caption(f"💾 Data disimpan: ADS {range_str}")
 
         # ===============================
         # RIWAYAT IKLAN
@@ -1344,298 +1565,341 @@ with tab5:
             st.write("Belum ada riwayat laporan iklan.")
         else:
             # Filter hanya yang bertipe ADS
-            for item in history_ads:
-                if not str(item["date_range"]).startswith("ADS"):
-                    continue
-
-                col1, col2, col3 = st.columns([3, 3, 2])
-                col1.write(f"📅 {item['date_range']}")
-                col2.write(f"⏰ {item['created_at'][:19]}")
-                col3.download_button(
-                    label="💾 Download Excel",
-                    data=item["csv_content"],
-                    file_name=f"Ads_{selected_shop_ads}_{item['created_at'][:10]}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=f"ads_dl_{item['id']}"
-                )
+            ads_history = [item for item in history_ads if str(item["date_range"]).startswith("ADS")]
+            
+            if not ads_history:
+                st.write("Belum ada riwayat laporan iklan.")
+            else:
+                for item in ads_history:
+                    col1, col2, col3 = st.columns([3, 3, 2])
+                    date_range_clean = item["date_range"].replace("ADS ", "")
+                    col1.write(f"📅 {date_range_clean}")
+                    col2.write(f"⏰ {item['created_at'][:19]}")
+                    col3.download_button(
+                        label="💾 Download",
+                        data=item["csv_content"],
+                        file_name=f"Ads_{selected_shop_ads}_{item['created_at'][:10]}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"ads_dl_{item['id']}"
+                    )
 
 with tab6:
     st.header("🔁 Seller Conversion")
-    st.info("Menarik data seller conversion / affiliate conversion menggunakan API AMS Shopee.")
+    st.info("Untuk Menarik data seller conversion coba dengan Link ")
 
-    if not shop_names:
-        st.warning("Belum ada toko.")
-    else:
-        selected_shop_conv = st.selectbox("Pilih Toko untuk Conversion", shop_names, key="shop_conv")
-
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            start_conv = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=7), key="s_conv")
-        with col_c2:
-            end_conv = st.date_input("Sampai Tanggal", datetime.date.today(), key="e_conv")
-
-        if st.button("📊 Tarik Seller Conversion"):
-            token_row = get_shop_token(selected_shop_conv)
-            if not token_row:
-                st.error("Token tidak ditemukan.")
-            else:
-                ACTIVE_SHOP_ID = token_row["shop_id"]
-                ACTIVE_ACCESS_TOKEN = token_row["access_token"]
-
-                # Konversi ke Timestamp (00:00:00 s/d 23:59:59)
-                time_from = int(time.mktime(start_conv.timetuple()))
-                time_to = int(time.mktime(end_conv.timetuple())) + 86399
-
-                # API Path untuk AMS Conversion Report
-                path_conv = "/api/v2/ams/get_conversion_report"
-                
-                all_conv_data = []
-                cursor = ""
-                has_more = True
-                
-                prog_conv = st.progress(0)
-                status_text = st.empty()
-                
-                # Mapping Status agar sesuai Dashboard Indonesia
-                status_map = {
-                    "UNPAID": "Belum Dibayar",
-                    "READY_TO_SHIP": "Sedang Diproses",
-                    "PROCESSED": "Sedang Diproses",
-                    "SHIPPED": "Sedang Diproses",
-                    "COMPLETED": "Selesai",
-                    "CANCELLED": "Dibatalkan",
-                    "IN_CANCEL": "Dibatalkan",
-                    "TO_CONFIRM_RECEIVE": "Sedang Diproses"
-                }
-
-                while has_more:
-                    ts_conv = int(time.time())
-                    sign_conv = generate_sign_full(path_conv, ts_conv, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-
-                    params = {
-                        "partner_id": PARTNER_ID,
-                        "timestamp": ts_conv,
-                        "access_token": ACTIVE_ACCESS_TOKEN,
-                        "shop_id": int(ACTIVE_SHOP_ID),
-                        "sign": sign_conv,
-                        "purchase_time_from": time_from,
-                        "purchase_time_to": time_to,
-                        "page_size": 50,
-                        "cursor": cursor
-                    }
-
-                    try:
-                        resp = requests.get(BASE_URL + path_conv, params=params).json()
-                        
-                        if resp.get("error"):
-                            st.error(f"Error API: {resp.get('message')}")
-                            break
-                        
-                        res_data = resp.get("response", {})
-                        report_list = res_data.get("report_list", [])
-                        
-                        if not report_list:
-                            break
-
-                        for item in report_list:
-                            raw_status = item.get("order_status", "").upper()
-
-                            if raw_status != "COMPLETED":
-                                continue
-                                
-                            status_indo = status_map.get(raw_status, raw_status)
-
-                            
-                            # Logika Status Terverifikasi (Sesuai Sample: COMPLETED -> Verified)
-                            verified_status = "Verified" if raw_status == "COMPLETED" else "Belum Diverifikasi"
-
-                            # Helper format tanggal
-                            def fmt_ts(ts):
-                                if not ts or ts == 0: return ""
-                                return pd.to_datetime(ts, unit='s').strftime('%Y-%m-%d %H:%M:%S')
-
-                            # Mapping Field Sesuai File SellerConversionReport.csv
-                            all_conv_data.append({
-                                "Kode Pesanan": item.get("order_sn"),
-                                "Status Pesanan": status_indo,
-                                "Status Terverifikasi": verified_status,
-                                "Waktu Pesanan": fmt_ts(item.get("purchase_time")),
-                                "Waktu Pesanan Selesai": fmt_ts(item.get("finish_time")),
-                                "Waktu Pesanan Terverifikasi": fmt_ts(item.get("validation_time")),
-                                "Kode Produk": item.get("item_id"),
-                                "Nama Produk": item.get("item_name"),
-                                "ID Model": item.get("model_id"),
-                                "L1 Kategori Global": item.get("category_l1", ""),
-                                "L2 Kategori Global": item.get("category_l2", ""),
-                                "L3 Kategori Global": item.get("category_l3", ""),
-                                "Kode Promo": item.get("promo_code", ""),
-                                "Harga(Rp)": item.get("item_price", 0),
-                                "Jumlah": item.get("item_count", 0),
-                                "Nama Affiliate": item.get("affiliate_name", ""),
-                                "Username Affiliate": item.get("affiliate_username", ""),
-                                "MCN Terhubung": item.get("mcn_name", ""),
-                                "ID Komisi Pesanan": item.get("commission_id", ""),
-                                "Partner Promo": item.get("partner_promo", ""),
-                                "Jenis Promo": item.get("promo_type", ""),
-                                "Nilai Pembelian(Rp)": item.get("total_item_price", 0),
-                                "Jumlah Pengembalian(Rp)": item.get("refund_amount", 0),
-                                "Tipe Pesanan": "Pesanan Langsung" if item.get("order_type") == "DIRECT" else "Pesanan Tidak Langsung",
-                                "Estimasi Komisi per Produk(Rp)": item.get("item_commission", 0),
-                                "Estimasi Komisi Affiliate per Produk(Rp)": item.get("item_affiliate_commission", 0),
-                                "Persentase Komisi Affiliate per Produk": f"{item.get('item_affiliate_commission_rate', 0)}%",
-                                "Estimasi Komisi MCN per Produk(Rp)": item.get("item_mcn_commission", 0),
-                                "Persentase Komisi MCN per Produk": f"{item.get('item_mcn_commission_rate', 0)}%",
-                                "Estimasi Komisi per Pesanan(Rp)": item.get("order_commission", 0),
-                                "Estimasi Komisi Affiliate per Pesanan(Rp)": item.get("order_affiliate_commission", 0),
-                                "Estimasi Komisi MCN per Pesanan(Rp)": item.get("order_mcn_commission", 0),
-                                "Catatan Produk": item.get("product_note", ""),
-                                "Platform": item.get("platform", "Shopee"),
-                                "Pengeluaran(Rp)": item.get("total_expense", 0),
-                                "Status Pemotongan": item.get("deduction_status", ""),
-                                "Metode Pemotongan": item.get("deduction_method", ""),
-                                "Waktu Pemotongan": fmt_ts(item.get("deduction_time"))
-                            })
-
-                        status_text.info(f"Mengambil data... (Total sementara: {len(all_conv_data)})")
-                        
-                        # Pagination: Jika next_cursor ada, lanjut ambil data berikutnya
-                        cursor = res_data.get("next_cursor", "")
-                        if not cursor or not res_data.get("has_next_page"):
-                            has_more = False
-                        
-                        time.sleep(0.4) # Jeda untuk menghindari rate limit
-                    except Exception as e:
-                        st.error(f"Gagal memproses API: {str(e)}")
-                        break
-
-                if all_conv_data:
-                    df_conv = pd.DataFrame(all_conv_data)
-                    st.success(f"Berhasil menarik total {len(df_conv)} baris data.")
-                    st.dataframe(df_conv)
-
-                    # Export ke Excel
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                        df_conv.to_excel(writer, index=False, sheet_name='Seller Conversion')
-                    excel_data = output.getvalue()
-
-                    st.download_button(
-                        label="📥 Download Seller Conversion (Excel)",
-                        data=excel_data,
-                        file_name=f"Seller_Conversion_{selected_shop_conv}_{start_conv}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                else:
-                    st.warning("Tidak ada data conversion ditemukan untuk periode ini.")
-        # ===============================
-        # RIWAYAT CONVERSION
-        # ===============================
-        st.divider()
-        st.subheader("📜 Riwayat Seller Conversion (Database)")
-
-        history_conv = get_report_history(selected_shop_conv)
-
-        if not history_conv:
-            st.write("Belum ada riwayat seller conversion.")
-        else:
-            for item in history_conv:
-                if not item["date_range"].startswith("CONVERSION"):
-                    continue
-
-                col1, col2, col3 = st.columns([3, 3, 2])
-                col1.write(f"📅 {item['date_range']}")
-                col2.write(f"⏰ {item['created_at'][:19]}")
-                col3.download_button(
-                    label="💾 Download Excel",
-                    data=item["csv_content"],
-                    file_name=f"Seller_Conversion_{selected_shop_conv}_{item['created_at'][:10]}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key=f"conv_{item['id']}"
-                )
-
+    
 with tab7:
     st.header("🕒 Performa Iklan Per Jam")
-    st.info("Data performa iklan seluruh toko berdasarkan jam (00:00 - 23:00).")
+    st.info("Data performa iklan seluruh toko berdasarkan jam (00:00 - 23:00) dengan timezone WIB (UTC+7).")
 
     if not shop_names:
         st.warning("Belum ada toko.")
     else:
         selected_shop_hourly = st.selectbox("Pilih Toko", shop_names, key="shop_hourly_v2")
-        target_date = st.date_input("Pilih Tanggal", datetime.date.today(), key="date_hourly_v2")
+        
+        # 🔴 PERBAIKAN: Pilihan preset tanggal
+        st.subheader("📅 Pilih Tanggal")
+        col_preset, col_custom = st.columns([1, 2])
+        
+        with col_preset:
+            preset_hourly = st.selectbox(
+                "Preset",
+                ["Hari Ini", "Kemarin", "2 Hari Lalu", "Custom"],
+                key="preset_hourly"
+            )
+        
+        # Set default date berdasarkan preset
+        today_wib = dt.date.today()
+        
+        if preset_hourly == "Hari Ini":
+            default_date = today_wib
+        elif preset_hourly == "Kemarin":
+            default_date = today_wib - dt.timedelta(days=1)
+        elif preset_hourly == "2 Hari Lalu":
+            default_date = today_wib - dt.timedelta(days=2)
+        else:  # Custom
+            default_date = today_wib - dt.timedelta(days=1)
+        
+        with col_custom:
+            target_date = st.date_input(
+                "Tanggal Target", 
+                default_date, 
+                key="date_hourly_v2",
+                max_value=today_wib  # Tidak bisa pilih tanggal masa depan
+            )
+        
+        # 🔴 PERBAIKAN: Info timezone WIB
+        st.caption(f"🕐 Data akan diambil untuk: {target_date} (WIB - UTC+7)")
+        
+        # Validasi: tidak boleh tanggal masa depan
+        if target_date > today_wib:
+            st.error("❌ Tidak bisa mengambil data untuk tanggal masa depan!")
+            st.stop()
 
-        if st.button("🚀 Tarik Data Per Jam"):
+        if st.button("🚀 Tarik Data Per Jam", type="primary"):
             token_row = get_shop_token(selected_shop_hourly)
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
 
-            # PERBAIKAN 1: Format tanggal harus DD-MM-YYYY sesuai dokumentasi
-            date_str = target_date.strftime("%d-%m-%Y")
-            ts_ads = int(time.time())
+            # Progress indicator
+            with st.spinner("🔄 Mengambil data performa per jam..."):
+                # Format tanggal DD-MM-YYYY untuk API (tetap sama, API internal Shopee pakai UTC)
+                date_str = target_date.strftime("%d-%m-%Y")
+                ts_ads = int(time.time())
 
-            path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
-            sign_hourly = generate_sign_full(path_hourly, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
+                sign_hourly = generate_sign_full(path_hourly, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
 
-            # PERBAIKAN 2: Nama parameter adalah 'performance_date'
-            params_hourly = {
-                "partner_id": int(PARTNER_ID),
-                "timestamp": ts_ads,
-                "access_token": ACTIVE_ACCESS_TOKEN,
-                "shop_id": int(ACTIVE_SHOP_ID),
-                "sign": sign_hourly,
-                "performance_date": date_str  
-            }
+                params_hourly = {
+                    "partner_id": int(PARTNER_ID),
+                    "timestamp": ts_ads,
+                    "access_token": ACTIVE_ACCESS_TOKEN,
+                    "shop_id": int(ACTIVE_SHOP_ID),
+                    "sign": sign_hourly,
+                    "performance_date": date_str  
+                }
 
-            res_hourly = requests.get(BASE_URL + path_hourly, params=params_hourly).json()
+                try:
+                    res_hourly = requests.get(
+                        BASE_URL + path_hourly, 
+                        params=params_hourly, 
+                        timeout=30
+                    ).json()
+                except Exception as e:
+                    st.error(f"❌ Error fetching data: {str(e)}")
+                    st.stop()
 
-            if "error" in res_hourly and res_hourly["error"] != "":
-                st.error(f"Error dari Shopee: {res_hourly.get('message')}")
-                st.write(res_hourly)
-            else:
-                # PERBAIKAN 3: Response langsung berupa list sesuai contoh JSON kamu
-                hourly_list = res_hourly.get("response") or []
+                if res_hourly.get("error"):
+                    error_msg = res_hourly.get("message", "Unknown error")
+                    st.error(f"❌ Error dari Shopee API: {error_msg}")
+                    
+                    # Debug info
+                    with st.expander("🔍 Debug Response"):
+                        st.json(res_hourly)
+                    st.stop()
+
+                # Ambil data response
+                hourly_list = res_hourly.get("response", [])
 
                 if not hourly_list:
-                    st.warning(f"Tidak ada data iklan untuk tanggal {date_str}.")
+                    st.warning(f"⚠️ Tidak ada data iklan untuk tanggal {date_str} (WIB).")
+                    st.info("💡 Tips: Coba pilih tanggal lain atau cek apakah ada iklan aktif pada tanggal tersebut.")
+                    st.stop()
+                
+                # 🔴 PERBAIKAN: Proses data dengan timezone WIB
+                # Buat template 24 jam (00:00 - 23:00 WIB)
+                hourly_data_map = {}
+                for h in range(24):
+                    wib_time = f"{str(h).zfill(2)}:00"
+                    hourly_data_map[wib_time] = {
+                        "Jam WIB": wib_time,
+                        "Lihat": 0,
+                        "Klik": 0,
+                        "Biaya": 0.0,
+                        "CTR (%)": 0.0,
+                        "CPC": 0.0
+                    }
+
+                total_impression = total_clicks = total_expense = 0
+                
+                for data in hourly_list:
+                    h_num = data.get("hour")
+                    if h_num is not None and 0 <= h_num <= 23:
+                        # Konversi jam UTC ke WIB (UTC+7)
+                        # Shopee API kembalikan jam dalam UTC, perlu konversi ke WIB
+                        utc_hour = h_num
+                        wib_hour = (utc_hour + 7) % 24  # Tambah 7 jam untuk WIB
+                        
+                        key = f"{str(wib_hour).zfill(2)}:00"
+                        
+                        impression = data.get("impression", 0) or 0
+                        clicks = data.get("clicks", 0) or 0
+                        expense = data.get("expense", 0) or 0
+                        
+                        hourly_data_map[key]["Lihat"] = impression
+                        hourly_data_map[key]["Klik"] = clicks
+                        hourly_data_map[key]["Biaya"] = expense
+                        
+                        # Hitung metrik turunan
+                        ctr = (clicks / impression * 100) if impression > 0 else 0
+                        cpc = (expense / clicks) if clicks > 0 else 0
+                        
+                        hourly_data_map[key]["CTR (%)"] = round(ctr, 2)
+                        hourly_data_map[key]["CPC"] = round(cpc, 0)
+                        
+                        total_impression += impression
+                        total_clicks += clicks
+                        total_expense += expense
+
+                # Susun DataFrame (urut berdasarkan jam 00-23)
+                rows_hourly = []
+                for h in range(24):
+                    jam_key = f"{str(h).zfill(2)}:00"
+                    rows_hourly.append(hourly_data_map[jam_key])
+
+                df_hourly = pd.DataFrame(rows_hourly)
+                
+                # 🔴 PERBAIKAN: Hitung metrik tambahan
+                total_ctr = (total_clicks / total_impression * 100) if total_impression > 0 else 0
+                total_cpc = (total_expense / total_clicks) if total_clicks > 0 else 0
+                
+                # Cari peak hour
+                peak_hour_idx = df_hourly["Biaya"].idxmax()
+                peak_hour = df_hourly.loc[peak_hour_idx, "Jam WIB"]
+                peak_biaya = df_hourly.loc[peak_hour_idx, "Biaya"]
+                
+                peak_click_idx = df_hourly["Klik"].idxmax()
+                peak_click_hour = df_hourly.loc[peak_click_idx, "Jam WIB"]
+                peak_click_val = df_hourly.loc[peak_click_idx, "Klik"]
+
+            # Tampilkan ringkasan
+            st.success(f"✅ Berhasil mengambil data performa per jam untuk {target_date} (WIB)")
+            
+            # 🔴 PERBAIKAN: Metrics cards
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Lihat", f"{total_impression:,}")
+            col2.metric("Total Klik", f"{total_clicks:,}")
+            col3.metric("Total Biaya", f"Rp {total_expense:,.0f}")
+            col4.metric("Total CTR", f"{total_ctr:.2f}%")
+            
+            col5, col6 = st.columns(2)
+            col5.metric("Peak Hour (Biaya)", f"{peak_hour} ({peak_biaya:,.0f})")
+            col6.metric("Peak Hour (Klik)", f"{peak_click_hour} ({peak_click_val:,})")
+
+            # 🔴 PERBAIKAN: Visualisasi Chart
+            st.subheader("📊 Grafik Performa Per Jam")
+            
+            tab_chart1, tab_chart2, tab_chart3 = st.tabs(["Biaya", "Klik & Lihat", "CTR"])
+            
+            with tab_chart1:
+                st.bar_chart(df_hourly.set_index("Jam WIB")["Biaya"])
+            
+            with tab_chart2:
+                chart_data = df_hourly.set_index("Jam WIB")[["Klik", "Lihat"]]
+                st.line_chart(chart_data)
+            
+            with tab_chart3:
+                st.line_chart(df_hourly.set_index("Jam WIB")["CTR (%)"])
+
+            # Tampilkan tabel data
+            st.subheader(f"📋 Detail Data Per Jam ({target_date} WIB)")
+            
+            # 🔴 PERBAIKAN: Highlight row dengan aktivitas tinggi
+            def highlight_peak(row):
+                if row["Biaya"] == peak_biaya:
+                    return ['background-color: #ffeb3b'] * len(row)
+                elif row["Biaya"] > (total_expense / 24 * 1.5):  # Di atas rata-rata 50%
+                    return ['background-color: #e3f2fd'] * len(row)
+                return [''] * len(row)
+            
+            styled_df = df_hourly.style.apply(highlight_peak, axis=1).format({
+                "Biaya": "Rp {:,.0f}",
+                "CPC": "Rp {:,.0f}",
+                "CTR (%)": "{:.2f}%",
+                "Lihat": "{:,}",
+                "Klik": "{:,}"
+            })
+            
+            st.dataframe(styled_df, use_container_width=True, height=600)
+
+            # 🔴 PERBAIKAN: Export Excel dengan formatting
+            output_h = io.BytesIO()
+            with pd.ExcelWriter(output_h, engine="openpyxl") as writer:
+                # Sheet 1: Data Per Jam
+                df_hourly.to_excel(writer, index=False, sheet_name="Hourly_Performance")
+                
+                # Sheet 2: Summary
+                summary_data = {
+                    "Metrik": [
+                        "Tanggal (WIB)",
+                        "Total Jam dengan Aktivitas",
+                        "Total Lihat (Impression)",
+                        "Total Klik",
+                        "Total Biaya",
+                        "Rata-rata CTR",
+                        "Rata-rata CPC",
+                        "Peak Hour (Biaya Tertinggi)",
+                        "Peak Hour (Klik Tertinggi)",
+                        "Jam Tanpa Aktivitas"
+                    ],
+                    "Nilai": [
+                        str(target_date),
+                        len([h for h in hourly_list if h.get("impression", 0) > 0]),
+                        total_impression,
+                        total_clicks,
+                        total_expense,
+                        f"{total_ctr:.2f}%",
+                        f"Rp {total_cpc:,.0f}",
+                        f"{peak_hour} (Rp {peak_biaya:,.0f})",
+                        f"{peak_click_hour} ({peak_click_val:,} klik)",
+                        len([h for h in hourly_list if h.get("impression", 0) == 0])
+                    ]
+                }
+                pd.DataFrame(summary_data).to_excel(writer, index=False, sheet_name="Summary")
+                
+                # Formatting
+                for sheet_name in ["Hourly_Performance", "Summary"]:
+                    worksheet = writer.sheets[sheet_name]
+                    for column in worksheet.columns:
+                        max_length = 0
+                        column_letter = column[0].column_letter
+                        for cell in column:
+                            try:
+                                if len(str(cell.value)) > max_length:
+                                    max_length = len(str(cell.value))
+                            except:
+                                pass
+                        adjusted_width = min(max_length + 2, 50)
+                        worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            excel_bytes = output_h.getvalue()
+            
+            # Simpan ke database
+            save_report_to_db(
+                selected_shop_hourly, 
+                f"HOURLY {target_date}", 
+                excel_bytes
+            )
+            
+            col_dl, col_info = st.columns([1, 3])
+            with col_dl:
+                st.download_button(
+                    label="💾 Download Excel",
+                    data=excel_bytes,
+                    file_name=f"Ads_Hourly_{selected_shop_hourly}_{target_date}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            with col_info:
+                st.caption(f"💾 Data disimpan: HOURLY {target_date} (WIB)")
+
+        # ===============================
+        # RIWAYAT PER JAM
+        # ===============================
+        st.divider()
+        st.subheader("📜 Riwayat Laporan Per Jam (Database)")
+
+        if 'selected_shop_hourly' in locals():
+            history_hourly = get_report_history(selected_shop_hourly)
+            
+            if not history_hourly:
+                st.write("Belum ada riwayat laporan per jam.")
+            else:
+                # Filter hanya yang bertipe HOURLY
+                hourly_history = [item for item in history_hourly if str(item["date_range"]).startswith("HOURLY")]
+                
+                if not hourly_history:
+                    st.write("Belum ada riwayat laporan per jam.")
                 else:
-                    # Buat template 24 jam agar urut
-                    hourly_data_map = {f"{str(h).zfill(2)}:00": {"Lihat": 0, "Klik": 0, "Biaya": 0} for h in range(24)}
-
-                    for data in hourly_list:
-                        h_num = data.get("hour")
-                        if h_num is not None:
-                            key = f"{str(h_num).zfill(2)}:00"
-                            if key in hourly_data_map:
-                                # PERBAIKAN 4: Nama field sesuai dokumentasi (impression, clicks, expense)
-                                hourly_data_map[key]["Lihat"] = data.get("impression", 0)
-                                hourly_data_map[key]["Klik"] = data.get("clicks", 0)
-                                hourly_data_map[key]["Biaya"] = data.get("expense", 0)
-
-                    # Susun baris untuk DataFrame & Excel
-                    rows_hourly = []
-                    for jam, val in hourly_data_map.items():
-                        rows_hourly.append({
-                            "Jam": jam,
-                            "Lihat": val["Lihat"],
-                            "Klik": val["Klik"],
-                            "Biaya": val["Biaya"]
-                        })
-
-                    df_hourly = pd.DataFrame(rows_hourly)
-
-                    # Tampilkan di Streamlit
-                    st.subheader(f"Hasil Performa Jam: {date_str}")
-                    st.dataframe(df_hourly, use_container_width=True)
-
-                    # Export Excel
-                    output_h = io.BytesIO()
-                    with pd.ExcelWriter(output_h, engine="xlsxwriter") as writer:
-                        df_hourly.to_excel(writer, index=False, sheet_name="Hourly_Ads")
-                    
-                    excel_bytes = output_h.getvalue()
-                    st.download_button(
-                        label="💾 Download Excel Per Jam",
-                        data=excel_bytes,
-                        file_name=f"Ads_Hourly_{selected_shop_hourly}_{date_str}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+                    for item in hourly_history:
+                        col1, col2, col3 = st.columns([3, 3, 2])
+                        date_clean = item["date_range"].replace("HOURLY ", "")
+                        col1.write(f"📅 {date_clean} (WIB)")
+                        col2.write(f"⏰ {item['created_at'][:19]}")
+                        col3.download_button(
+                            label="💾 Download",
+                            data=item["csv_content"],
+                            file_name=f"Hourly_{selected_shop_hourly}_{date_clean}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key=f"hourly_dl_{item['id']}"
+                        )
 
