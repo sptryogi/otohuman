@@ -7,3 +7,4 @@ xlsxwriter
 rapidfuzz
 pdfplumber
 xlsxwriter
+pytz
