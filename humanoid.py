@@ -154,47 +154,213 @@ def get_escrow_detail(order_sn, access_token, shop_id):
 
 def create_income_excel(df_inc, df_srv, df_prc, shop_name, start_date, end_date):
     output = io.BytesIO()
+    
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        # --- SHEET 1: Summary ---
-        total_pendapatan = df_inc["Harga Asli Produk"].sum() + df_inc["Total Diskon Produk"].sum()
+        workbook = writer.book
+        
+        # --- SHEET 1: Summary dengan Format Rapi ---
+        ws_summary = workbook.create_sheet('Summary')
+        
+        # Style untuk formatting
+        from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+        
+        # Bold font untuk header
+        bold_font = Font(bold=True, size=11)
+        header_font = Font(bold=True, size=12)
+        normal_font = Font(size=11)
+        
+        # Alignment
+        left_align = Alignment(horizontal='left', vertical='center')
+        right_align = Alignment(horizontal='right', vertical='center')
+        
+        # Border
+        thin_border = Border(
+            bottom=Side(style='thin', color='000000')
+        )
+        
+        # Helper untuk menulis row
+        def write_row(row_idx, col1_text, col2_text="", col3_text="", bold=False, indent=0):
+            cell1 = ws_summary.cell(row=row_idx, column=1, value=col1_text)
+            cell2 = ws_summary.cell(row=row_idx, column=2, value=col2_text)
+            cell3 = ws_summary.cell(row=row_idx, column=3, value=col3_text)
+            
+            if bold:
+                cell1.font = bold_font
+                cell2.font = bold_font
+                cell3.font = bold_font
+            
+            cell1.alignment = Alignment(horizontal='left', vertical='center', indent=indent)
+            cell2.alignment = right_align
+            cell3.alignment = right_align
+            
+            return row_idx + 1
+
+        # Hitung nilai-nilai
+        harga_asli = df_inc["Harga Asli Produk"].sum()
+        total_diskon = df_inc["Total Diskon Produk"].sum()
+        refund_pembeli = df_inc["Jumlah Pengembalian Dana ke Pembeli"].sum()
+        subtotal_pesanan = harga_asli + total_diskon - refund_pembeli
+        
+        # Voucher & Subsidi
+        diskon_shopee = df_inc["Diskon Produk dari Shopee"].sum()
+        voucher_penjual = df_inc["Voucher dari Penjual"].sum()
+        cashback_penjual = df_inc["Cashback Koin dari Penjual"].sum()
+        total_voucher_subsidi = diskon_shopee + voucher_penjual + cashback_penjual
+        
+        # Biaya Pengiriman
+        ongkir_pembeli = df_inc["Ongkir Dibayar Pembeli"].sum()
+        diskon_ongkir_3pl = df_inc["Diskon Ongkir Ditanggung Jasa Kirim"].sum()
+        gratis_ongkir_shopee = df_inc["Gratis Ongkir dari Shopee"].sum()
+        ongkir_diteruskan = df_inc["Ongkir yang Diteruskan oleh Shopee ke Jasa Kirim"].sum()
+        ongkir_return = df_inc["Ongkos Kirim Pengembalian Barang"].sum()
+        pengembalian_biaya_kirim = df_inc["Pengembalian Biaya Kirim"].sum()
+        kembali_biaya_pengirim = df_inc["Kembali ke Biaya Pengiriman Pengirim"].sum()
+        total_biaya_pengiriman = (ongkir_pembeli + diskon_ongkir_3pl + gratis_ongkir_shopee + 
+                                  ongkir_diteruskan + ongkir_return + pengembalian_biaya_kirim + 
+                                  kembali_biaya_pengirim)
+        
+        # Biaya Admin & Layanan
+        biaya_ams = df_inc["Biaya Komisi AMS"].sum()
         biaya_admin = df_inc["Biaya Administrasi"].sum()
         biaya_layanan = df_inc["Biaya Layanan"].sum()
         biaya_proses = df_inc["Biaya Proses Pesanan"].sum()
-        biaya_ams = df_inc["Biaya Komisi AMS"].sum()
-        total_pengeluaran = biaya_admin + biaya_layanan + biaya_proses + biaya_ams
-        total_bersih = df_inc["Total Penghasilan"].sum()
-
-        summary_rows = [
-            ["Rincian Laporan", ""],
-            ["Username (Penjual)", shop_name],
-            ["Dari", start_date],
-            ["Ke", end_date],
-            ["", ""],
-            ["Ringkasan Penghasilan", "Rp"],
-            ["1. Total Pendapatan", total_pendapatan],
-            ["   Subtotal Pesanan", total_pendapatan],
-            ["      Harga Asli Produk", df_inc["Harga Asli Produk"].sum()],
-            ["      Total Diskon Produk", df_inc["Total Diskon Produk"].sum()],
-            ["", ""],
-            ["2. Total Pengeluaran", total_pengeluaran],
-            ["   Biaya Admin & Layanan", total_pengeluaran],
-            ["      Biaya Administrasi", biaya_admin],
-            ["      Biaya Layanan", biaya_layanan],
-            ["      Biaya Proses Pesanan", biaya_proses],
-            ["      Biaya Komisi AMS", biaya_ams],
-            ["", ""],
-            ["3. Total yang Dilepas", total_bersih]
-        ]
-        pd.DataFrame(summary_rows).to_excel(writer, sheet_name='Summary', index=False, header=False)
-
-        # --- SHEET 2: Income (40+ Kolom) ---
+        premi = df_inc["Premi"].sum()
+        biaya_hemat_kirim = df_inc["Biaya Program Hemat Biaya Kirim"].sum()
+        biaya_transaksi = df_inc["Biaya Transaksi"].sum()
+        biaya_kampanye = df_inc["Biaya Kampanye"].sum()
+        total_biaya_admin = biaya_ams + biaya_admin + biaya_layanan + biaya_proses + premi + biaya_hemat_kirim + biaya_transaksi + biaya_kampanye
+        
+        # Total perhitungan
+        total_pendapatan = subtotal_pesanan + total_voucher_subsidi
+        total_pengeluaran = total_biaya_pengiriman + total_biaya_admin
+        total_dilepas = df_inc["Total Penghasilan"].sum()
+        
+        # Promo dari penjual
+        promo_gratis_ongkir = df_inc["Promo Gratis Ongkir dari Penjual"].sum()
+        
+        # Mulai menulis data
+        current_row = 1
+        
+        # Header
+        current_row = write_row(current_row, "Laporan Penghasilan", "", "", bold=True)
+        current_row += 1  # Empty row
+        
+        # Rincian Laporan
+        current_row = write_row(current_row, "Rincian Laporan", "", "", bold=True)
+        current_row = write_row(current_row, "Username (Penjual)", shop_name)
+        current_row = write_row(current_row, "Dari", str(start_date))
+        current_row = write_row(current_row, "ke", str(end_date))
+        current_row += 1  # Empty row
+        
+        # Ringkasan Penghasilan
+        current_row = write_row(current_row, "Ringkasan Penghasilan", "", "Rp", bold=True)
+        
+        # 1. Total Pendapatan
+        current_row = write_row(current_row, "1. Total Pendapatan", "", total_pendapatan, bold=True)
+        current_row = write_row(current_row, "Subtotal Pesanan", "", subtotal_pesanan, indent=1)
+        current_row = write_row(current_row, "Harga Asli Produk", "", harga_asli, indent=2)
+        current_row = write_row(current_row, "Total Diskon Produk", "", total_diskon, indent=2)
+        current_row = write_row(current_row, "Jumlah Pengembalian Dana ke Pembeli", "", refund_pembeli, indent=2)
+        current_row += 1  # Empty row
+        
+        # Voucher & Subsidi Shopee
+        current_row = write_row(current_row, "Voucher & Subsidi Shopee", "", total_voucher_subsidi, bold=True, indent=1)
+        current_row = write_row(current_row, "Diskon Produk dari Shopee", "", diskon_shopee, indent=2)
+        current_row = write_row(current_row, "Voucher dari Penjual", "", voucher_penjual, indent=2)
+        current_row = write_row(current_row, "Cashback Koin dari Penjual", "", cashback_penjual, indent=2)
+        current_row += 1  # Empty row
+        
+        # 2. Total Pengeluaran
+        current_row = write_row(current_row, "2. Total Pengeluaran", "", total_pengeluaran, bold=True)
+        current_row = write_row(current_row, "Total Biaya Pengiriman", "", total_biaya_pengiriman, indent=1)
+        current_row = write_row(current_row, "Ongkir Dibayar Pembeli", "", ongkir_pembeli, indent=2)
+        current_row = write_row(current_row, "Diskon Ongkir Ditanggung Jasa Kirim", "", diskon_ongkir_3pl, indent=2)
+        current_row = write_row(current_row, "Gratis Ongkir dari Shopee", "", gratis_ongkir_shopee, indent=2)
+        current_row = write_row(current_row, "Ongkir yang Diteruskan oleh Shopee ke Jasa Kirim", "", ongkir_diteruskan, indent=2)
+        current_row = write_row(current_row, "Ongkos Kirim Pengembalian Barang", "", ongkir_return, indent=2)
+        current_row = write_row(current_row, "Pengembalian Biaya Kirim", "", pengembalian_biaya_kirim, indent=2)
+        current_row = write_row(current_row, "Kembali ke Biaya Pengiriman Pengirim", "", kembali_biaya_pengirim, indent=2)
+        current_row += 1  # Empty row
+        
+        # Biaya Admin & Layanan
+        current_row = write_row(current_row, "Biaya Admin & Layanan", "", total_biaya_admin, bold=True, indent=1)
+        current_row = write_row(current_row, "Biaya Komisi AMS", "", biaya_ams, indent=2)
+        current_row = write_row(current_row, "Biaya Administrasi", "", biaya_admin, indent=2)
+        current_row = write_row(current_row, "Biaya Layanan", "", biaya_layanan, indent=2)
+        current_row = write_row(current_row, "Biaya Proses Pesanan", "", biaya_proses, indent=2)
+        current_row = write_row(current_row, "Premi", "", premi, indent=2)
+        current_row = write_row(current_row, "Biaya Program Hemat Biaya Kirim", "", biaya_hemat_kirim, indent=2)
+        current_row = write_row(current_row, "Biaya Transaksi", "", biaya_transaksi, indent=2)
+        current_row = write_row(current_row, "Biaya Kampanye", "", biaya_kampanye, indent=2)
+        current_row += 2  # Empty rows
+        
+        # 3. Total yang Dilepas
+        current_row = write_row(current_row, "3. Total yang Dilepas", "", total_dilepas, bold=True)
+        current_row += 2  # Empty rows
+        
+        # Nilai Lainnya
+        current_row = write_row(current_row, "Nilai Lainnya", "", "", bold=True)
+        current_row = write_row(current_row, "Promo Gratis Ongkir dari Penjual", "", promo_gratis_ongkir)
+        
+        # Adjust column widths
+        ws_summary.column_dimensions['A'].width = 50
+        ws_summary.column_dimensions['B'].width = 15
+        ws_summary.column_dimensions['C'].width = 20
+        
+        # Format numbers in column C as currency
+        for row in ws_summary.iter_rows(min_row=1, max_row=current_row, min_col=3, max_col=3):
+            for cell in row:
+                if isinstance(cell.value, (int, float)) and cell.value != 0:
+                    cell.number_format = '#,##0'
+        
+        # --- SHEET 2: Income Detail (40+ Kolom) ---
         df_inc.to_excel(writer, sheet_name='Income', index=False)
-
+        ws_income = writer.sheets['Income']
+        
+        # Auto-adjust column widths
+        for column in ws_income.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws_income.column_dimensions[column_letter].width = adjusted_width
+        
         # --- SHEET 3: Service Fee Details ---
         df_srv.to_excel(writer, sheet_name='Service Fee Details', index=False)
-
+        ws_srv = writer.sheets['Service Fee Details']
+        
+        for column in ws_srv.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws_srv.column_dimensions[column_letter].width = adjusted_width
+        
         # --- SHEET 4: Order Processing Fee ---
         df_prc.to_excel(writer, sheet_name='Order Processing Fee', index=False)
+        ws_prc = writer.sheets['Order Processing Fee']
+        
+        for column in ws_prc.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws_prc.column_dimensions[column_letter].width = adjusted_width
         
     return output.getvalue()
 
