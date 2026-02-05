@@ -529,7 +529,6 @@ with tab4:
         
         col_i1, col_i2 = st.columns(2)
         with col_i1:
-            # Default 30 hari agar data lebih mungkin ditemukan
             start_inc = st.date_input("Dari Tanggal", datetime.date.today() - datetime.timedelta(days=30), key="dt_start_inc")
         with col_i2:
             end_inc = st.date_input("Sampai Tanggal", datetime.date.today(), key="dt_end_inc")
@@ -548,25 +547,21 @@ with tab4:
             income_rows = []
             service_rows = []
             
-            # 2. KONVERSI WAKTU KE TIMESTAMP UTC (PENTING!)
-            # Buat datetime object dengan timezone UTC
+            # 2. KONVERSI WAKTU KE TIMESTAMP UTC
             start_dt = datetime.datetime.combine(start_inc, datetime.time.min)
             end_dt = datetime.datetime.combine(end_inc, datetime.time.max)
             
-            # Konversi ke timestamp UTC
             time_from = int(start_dt.timestamp())
             time_to = int(end_dt.timestamp())
             
-            # Debug: Tampilkan timestamp yang digunakan
-            st.write(f"🔍 Debug - Timestamp From: {time_from} ({datetime.datetime.fromtimestamp(time_from)})")
-            st.write(f"🔍 Debug - Timestamp To: {time_to} ({datetime.datetime.fromtimestamp(time_to)})")
+            st.write(f"🔍 Timestamp From: {time_from} ({datetime.datetime.fromtimestamp(time_from)})")
+            st.write(f"🔍 Timestamp To: {time_to} ({datetime.datetime.fromtimestamp(time_to)})")
             
-            status_text.info(f"🔍 Mencari data dana dilepaskan dari {start_inc} s/d {end_inc}...")
+            status_text.info(f"🔍 Mencari data dana dilepaskan...")
 
-            # 3. AMBIL DAFTAR PESANAN CAIR (get_escrow_list)
+            # 3. AMBIL DAFTAR PESANAN CAIR
             path_esc = "/api/v2/payment/get_escrow_list"
             page_no = 1
-            total_data = 0
             
             while True:
                 ts = int(time.time())
@@ -580,7 +575,7 @@ with tab4:
                     "sign": sign,
                     "release_time_from": time_from, 
                     "release_time_to": time_to,
-                    "page_size": 50,  # Maksimum 50
+                    "page_size": 50,
                     "page_no": page_no
                 }
                 
@@ -588,72 +583,72 @@ with tab4:
                     response = requests.get(BASE_URL + path_esc, params=params, timeout=30)
                     res = response.json()
                     
-                    # DEBUG: Tampilkan response mentah untuk troubleshooting
-                    if page_no == 1:
-                        with st.expander("🔍 Debug: Response API mentah"):
-                            st.json(res)
-                    
-                    # Cek error di response
                     if res.get("error"):
-                        st.error(f"API Error: {res.get('message', 'Unknown error')}")
-                        st.json(res)
+                        st.error(f"API Error: {res.get('message')}")
                         break
                     
                     escrow_data = res.get("response", {}).get("escrow_list", [])
-                    total_data += len(escrow_data)
                     
                     if escrow_data:
                         for item in escrow_data:
                             all_sn_list.append(item.get("order_sn"))
                     
-                    # Cek pagination
                     has_more = res.get("response", {}).get("more", False)
-                    status_text.info(f"📄 Halaman {page_no}: {len(escrow_data)} data ditemukan (Total: {total_data})")
                     
                     if not has_more or not escrow_data:
                         break
-                        
                     page_no += 1
                     
-                    # Safety limit
-                    if page_no > 100:
-                        st.warning("⚠️ Mencapai limit 100 halaman, menghentikan...")
-                        break
-                        
                 except Exception as e:
-                    st.error(f"❌ Error saat tarik list halaman {page_no}: {str(e)}")
-                    st.error(f"Response: {response.text if 'response' in locals() else 'N/A'}")
+                    st.error(f"❌ Error: {str(e)}")
                     break
 
-            # 4. JIKA DATA DITEMUKAN, TARIK DETAILNYA
+            # 4. PROSES DETAIL
             if not all_sn_list:
                 st.error(f"❌ Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc}.")
-                st.info("💡 Tips: Coba perpanjang rentang tanggal (misal 60-90 hari ke belakang) atau cek di Seller Center apakah memang tidak ada dana yang dilepaskan pada periode tersebut.")
             else:
-                st.success(f"✅ Ditemukan {len(all_sn_list)} order SN yang akan diproses")
+                st.success(f"✅ Ditemukan {len(all_sn_list)} order SN")
                 
-                # Proses detail per order
+                # 🔴 DEBUG: Cek list SN
+                with st.expander("🔍 Daftar Order SN yang akan diproses"):
+                    st.write(all_sn_list)
+                
+                error_list = []
+                
                 for idx, sn in enumerate(all_sn_list):
                     progress_pct = (idx + 1) / len(all_sn_list)
                     prog_bar.progress(progress_pct)
-                    status_text.text(f"[{idx+1}/{len(all_sn_list)}] Memproses: {sn} ({int(progress_pct*100)}%)")
+                    status_text.text(f"[{idx+1}/{len(all_sn_list)}] Memproses: {sn}")
                     
                     try:
-                        # A. Ambil Data Keuangan (Escrow Detail)
+                        # A. Ambil Escrow Detail
                         esc_res = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                         
-                        # DEBUG untuk order pertama
+                        # 🔴 DEBUG: Cek struktur response
                         if idx == 0:
-                            with st.expander("🔍 Debug: Struktur Escrow Detail"):
+                            with st.expander("🔍 Debug: Escrow Detail Response"):
                                 st.json(esc_res)
                         
-                        oi = esc_res.get("response", {}).get("order_income", {})
-                        
-                        if not oi:
-                            st.warning(f"⚠️ Tidak ada data income untuk order {sn}")
+                        # Cek apakah ada error di response
+                        if esc_res.get("error"):
+                            error_msg = f"Order {sn}: API Error - {esc_res.get('message')}"
+                            error_list.append(error_msg)
+                            st.warning(error_msg)
                             continue
                         
-                        # B. Ambil Detail Order (Buyer & Produk)
+                        response_data = esc_res.get("response", {})
+                        oi = response_data.get("order_income", {})
+                        
+                        # 🔴 DEBUG: Cek oi
+                        if idx == 0:
+                            st.write(f"🔍 Order Income keys: {oi.keys() if oi else 'EMPTY'}")
+                        
+                        if not oi:
+                            error_msg = f"Order {sn}: Tidak ada order_income"
+                            error_list.append(error_msg)
+                            continue
+                        
+                        # B. Ambil Order Detail
                         path_dtl = "/api/v2/order/get_order_detail"
                         ts_dtl = int(time.time())
                         sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
@@ -664,33 +659,68 @@ with tab4:
                             "shop_id": int(ACTIVE_SHOP_ID), 
                             "sign": sign_dtl, 
                             "order_sn_list": sn,
-                            "response_optional_fields": "item_list,buyer_username,create_time,shipping_carrier,payment_method,recipient_address"
+                            "response_optional_fields": "item_list,buyer_username,create_time,shipping_carrier,payment_method"
                         }
                         
                         ord_res = requests.get(BASE_URL + path_dtl, params=p_dtl, timeout=30).json()
-                        ord_dtl = ord_res.get("response", {}).get("order_list", [{}])[0]
-
-                        # Tanggal Released Format YYYY-MM-DD
+                        
+                        if ord_res.get("error"):
+                            error_msg = f"Order {sn}: Order Detail Error - {ord_res.get('message')}"
+                            error_list.append(error_msg)
+                            st.warning(error_msg)
+                            continue
+                        
+                        ord_list = ord_res.get("response", {}).get("order_list", [])
+                        
+                        if not ord_list:
+                            error_msg = f"Order {sn}: Tidak ada order_list"
+                            error_list.append(error_msg)
+                            continue
+                        
+                        ord_dtl = ord_list[0]
+                        
+                        # 🔴 DEBUG: Cek ord_dtl
+                        if idx == 0:
+                            with st.expander("🔍 Debug: Order Detail"):
+                                st.json(ord_dtl)
+                        
+                        # --- FORMATTING TANGGAL ---
+                        # Tanggal Released
                         release_ts = oi.get("escrow_release_time")
-                        release_dt = ""
                         if release_ts:
-                            # Shopee timestamp dalam detik
+                            # Konversi timestamp (detik) ke datetime
                             release_dt = datetime.datetime.fromtimestamp(release_ts).strftime('%Y-%m-%d')
-
-                        # --- MAPPING 41 KOLOM EXACT ---
-                        # Perbaikan: Cek null/None dengan default 0
-                        income_rows.append({
+                        else:
+                            release_dt = ""
+                        
+                        # Tanggal Order Dibuat
+                        create_ts = ord_dtl.get("create_time")
+                        if create_ts:
+                            create_dt = datetime.datetime.fromtimestamp(create_ts).strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            create_dt = ""
+                        
+                        # --- AMBIL ITEM LIST ---
+                        items = ord_dtl.get("item_list", [])
+                        
+                        # --- HITUNG TOTAL DISKON ---
+                        seller_disc = oi.get("seller_discount", 0) or 0
+                        shopee_disc = oi.get("shopee_discount", 0) or 0
+                        total_disc = (seller_disc + shopee_disc) * -1
+                        
+                        # --- MAPPING 41 KOLOM ---
+                        row_data = {
                             "No.": idx + 1,
                             "No. Pesanan": sn,
-                            "No. Pengajuan": oi.get("return_order_sn_list", [""])[0] if oi.get("return_order_sn_list") else "",
+                            "No. Pengajuan": "",
                             "Username (Pembeli)": ord_dtl.get("buyer_username", ""),
-                            "Waktu Pesanan Dibuat": datetime.datetime.fromtimestamp(ord_dtl.get("create_time", 0)).strftime('%Y-%m-%d %H:%M:%S') if ord_dtl.get("create_time") else "",
+                            "Waktu Pesanan Dibuat": create_dt,
                             "Metode pembayaran pembeli": ord_dtl.get("payment_method", ""),
                             "Tanggal Dana Dilepaskan": release_dt,
-                            "Harga Asli Produk": oi.get("original_price", 0) or 0,  # Coba original_price juga
-                            "Total Diskon Produk": ((oi.get("seller_discount", 0) or 0) + (oi.get("shopee_discount", 0) or 0)) * -1,
+                            "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0) or 0,
+                            "Total Diskon Produk": total_disc,
                             "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0) or 0,
-                            "Diskon Produk dari Shopee": oi.get("shopee_discount", 0) or 0,
+                            "Diskon Produk dari Shopee": shopee_disc,
                             "Voucher dari Penjual": oi.get("voucher_from_seller", 0) or 0,
                             "Cashback Koin dari Penjual": oi.get("seller_coin_cash_back", 0) or 0,
                             "Ongkir Dibayar Pembeli": oi.get("buyer_paid_shipping_fee", 0) or 0,
@@ -720,9 +750,11 @@ with tab4:
                             "Pro-rata Voucher Shopee untuk Pengembalian Barang": 0,
                             "Pro-rated Bank Payment Channel Promotion for return refund Items": 0,
                             "Pro-rated Shopee Payment Channel Promotion for return refund Items": 0
-                        })
-
-                        # Sheet Service Fee & Processing Fee
+                        }
+                        
+                        income_rows.append(row_data)
+                        
+                        # Sheet Service Fee
                         service_rows.append({
                             "No.": idx + 1, 
                             "No. Pesanan": sn, 
@@ -730,10 +762,25 @@ with tab4:
                         })
                         
                     except Exception as e:
-                        st.error(f"❌ Error memproses order {sn}: {str(e)}")
+                        error_msg = f"Order {sn}: Exception - {str(e)}"
+                        error_list.append(error_msg)
+                        st.error(error_msg)
+                        import traceback
+                        st.code(traceback.format_exc())
                         continue
 
-                # --- 5. GENERATE EXCEL & DOWNLOAD ---
+                # --- HASIL AKHIR ---
+                status_text.empty()
+                
+                # 🔴 DEBUG: Cek hasil
+                st.write(f"🔍 Total income_rows: {len(income_rows)}")
+                st.write(f"🔍 Total errors: {len(error_list)}")
+                
+                if error_list:
+                    with st.expander(f"⚠️ Daftar Error ({len(error_list)})"):
+                        for err in error_list:
+                            st.write(f"- {err}")
+                
                 if income_rows:
                     df_inc = pd.DataFrame(income_rows)
                     df_srv = pd.DataFrame(service_rows)
@@ -742,39 +789,29 @@ with tab4:
                     df_prc = df_inc[["No.", "No. Pesanan", "Biaya Proses Pesanan"]].copy()
                     df_prc["View By"] = "Order"
                     
+                    # 🔴 TAMPILKAN DATAFRAME LANGSUNG
+                    st.subheader("📋 Data Income Berhasil Dibuat")
+                    st.dataframe(df_inc)
+                    
+                    # Generate Excel
                     excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc, str(start_inc), str(end_inc))
+                    
+                    total_income = df_inc["Total Penghasilan"].sum()
                     range_inc_str = f"{start_inc} s/d {end_inc}"
 
                     save_report_to_db(selected_shop_inc, f"INCOME {range_inc_str}", excel_file)
-                    status_text.empty()
+                    st.success(f"✅ Berhasil! {len(df_inc)} data, Total: Rp {total_income:,.0f}")
                     
-                    # Ringkasan
-                    total_income = df_inc["Total Penghasilan"].sum()
-                    st.success(f"✅ Berhasil menarik {len(df_inc)} data! Total Penghasilan: Rp {total_income:,.0f}")
-                    
-                    col_dl, col_prev = st.columns(2)
-                    with col_dl:
-                        st.download_button(
-                            label="📥 Download Laporan Income (Excel)",
-                            data=excel_file,
-                            file_name=f"Income_{selected_shop_inc}_{start_inc}_{end_inc}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                    
-                    # Preview tabel lengkap
-                    st.subheader("📋 Preview Data Income")
-                    preview_cols = ["No. Pesanan", "Tanggal Dana Dilepaskan", "Total Penghasilan", 
-                                   "Biaya Administrasi", "Biaya Layanan", "Username (Pembeli)"]
-                    available_cols = [c for c in preview_cols if c in df_inc.columns]
-                    st.dataframe(df_inc[available_cols].head(20))
-                    
-                    # Tampilkan data kosong
-                    empty_cols = df_inc.columns[df_inc.isna().all()].tolist()
-                    if empty_cols:
-                        with st.expander(f"⚠️ Kolom yang kosong semua ({len(empty_cols)} kolom)"):
-                            st.write(empty_cols)
+                    st.download_button(
+                        label="📥 Download Excel",
+                        data=excel_file,
+                        file_name=f"Income_{selected_shop_inc}_{start_inc}_{end_inc}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
                 else:
                     st.error("❌ Tidak ada data yang berhasil diproses.")
+                    st.info("Silakan periksa daftar error di atas untuk melihat penyebabnya.")
+                
  
             
             st.divider()
