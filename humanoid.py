@@ -520,7 +520,7 @@ with tab3:
 
 with tab4:
     st.header("💰 Laporan Income (Dana Dilepaskan)")
-    st.info("Data ditarik berdasarkan tanggal dana masuk ke saldo (Released). Pastikan rentang tanggal sudah sesuai dengan di Seller Center.")
+    st.info("Data ditarik berdasarkan tanggal dana masuk ke saldo (Released).")
 
     if not shop_names:
         st.warning("Belum ada toko.")
@@ -538,28 +538,22 @@ with tab4:
             ACTIVE_SHOP_ID = token_row["shop_id"]
             ACTIVE_ACCESS_TOKEN = token_row["access_token"]
             
-            # --- MULAI PROSES ---
             prog_bar = st.progress(0)
             status_text = st.empty()
             
-            # 1. SIAPKAN VARIABEL
             all_sn_list = []
             income_rows = []
             service_rows = []
             
-            # 2. KONVERSI WAKTU KE TIMESTAMP UTC
+            # Konversi waktu
             start_dt = datetime.datetime.combine(start_inc, datetime.time.min)
             end_dt = datetime.datetime.combine(end_inc, datetime.time.max)
-            
             time_from = int(start_dt.timestamp())
             time_to = int(end_dt.timestamp())
             
-            st.write(f"🔍 Timestamp From: {time_from} ({datetime.datetime.fromtimestamp(time_from)})")
-            st.write(f"🔍 Timestamp To: {time_to} ({datetime.datetime.fromtimestamp(time_to)})")
-            
             status_text.info(f"🔍 Mencari data dana dilepaskan...")
 
-            # 3. AMBIL DAFTAR PESANAN CAIR
+            # 1. AMBIL DAFTAR PESANAN CAIR
             path_esc = "/api/v2/payment/get_escrow_list"
             page_no = 1
             
@@ -603,17 +597,11 @@ with tab4:
                     st.error(f"❌ Error: {str(e)}")
                     break
 
-            # 4. PROSES DETAIL
+            # 2. PROSES DETAIL
             if not all_sn_list:
                 st.error(f"❌ Tidak ada dana cair ditemukan pada periode {start_inc} s/d {end_inc}.")
             else:
                 st.success(f"✅ Ditemukan {len(all_sn_list)} order SN")
-                
-                # 🔴 DEBUG: Cek list SN
-                with st.expander("🔍 Daftar Order SN yang akan diproses"):
-                    st.write(all_sn_list)
-                
-                error_list = []
                 
                 for idx, sn in enumerate(all_sn_list):
                     progress_pct = (idx + 1) / len(all_sn_list)
@@ -621,34 +609,31 @@ with tab4:
                     status_text.text(f"[{idx+1}/{len(all_sn_list)}] Memproses: {sn}")
                     
                     try:
-                        # A. Ambil Escrow Detail
+                        # 🔴 PERBAIKAN 1: Ambil Escrow Detail - CEK STRUKTUR RESPONSE
                         esc_res = get_escrow_detail(sn, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                         
-                        # 🔴 DEBUG: Cek struktur response
+                        # 🔴 DEBUG: Lihat struktur actual
                         if idx == 0:
-                            with st.expander("🔍 Debug: Escrow Detail Response"):
+                            with st.expander("🔍 Debug: Raw Escrow Detail Response"):
                                 st.json(esc_res)
                         
-                        # Cek apakah ada error di response
-                        if esc_res.get("error"):
-                            error_msg = f"Order {sn}: API Error - {esc_res.get('message')}"
-                            error_list.append(error_msg)
-                            st.warning(error_msg)
-                            continue
+                        # 🔴 PERBAIKAN 2: Cek apakah ada wrapper "response" atau langsung data
+                        if "response" in esc_res:
+                            oi = esc_res.get("response", {}).get("order_income", {})
+                            buyer_info = esc_res.get("response", {}).get("buyer_payment_info", {})
+                            buyer_username = esc_res.get("response", {}).get("buyer_user_name", "")
+                        else:
+                            # Langsung dari root response
+                            oi = esc_res.get("order_income", {})
+                            buyer_info = esc_res.get("buyer_payment_info", {})
+                            buyer_username = esc_res.get("buyer_user_name", "")
                         
-                        response_data = esc_res.get("response", {})
-                        oi = response_data.get("order_income", {})
-                        
-                        # 🔴 DEBUG: Cek oi
-                        if idx == 0:
-                            st.write(f"🔍 Order Income keys: {oi.keys() if oi else 'EMPTY'}")
-                        
+                        # Validasi data
                         if not oi:
-                            error_msg = f"Order {sn}: Tidak ada order_income"
-                            error_list.append(error_msg)
+                            st.warning(f"⚠️ Order {sn}: Tidak ada order_income")
                             continue
                         
-                        # B. Ambil Order Detail
+                        # 🔴 PERBAIKAN 3: Ambil Order Detail
                         path_dtl = "/api/v2/order/get_order_detail"
                         ts_dtl = int(time.time())
                         sign_dtl = generate_sign_full(path_dtl, ts_dtl, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
@@ -664,60 +649,52 @@ with tab4:
                         
                         ord_res = requests.get(BASE_URL + path_dtl, params=p_dtl, timeout=30).json()
                         
-                        if ord_res.get("error"):
-                            error_msg = f"Order {sn}: Order Detail Error - {ord_res.get('message')}"
-                            error_list.append(error_msg)
-                            st.warning(error_msg)
-                            continue
-                        
-                        ord_list = ord_res.get("response", {}).get("order_list", [])
+                        # Cek struktur order detail
+                        if "response" in ord_res:
+                            ord_list = ord_res.get("response", {}).get("order_list", [])
+                        else:
+                            ord_list = ord_res.get("order_list", [])
                         
                         if not ord_list:
-                            error_msg = f"Order {sn}: Tidak ada order_list"
-                            error_list.append(error_msg)
-                            continue
+                            st.warning(f"⚠️ Order {sn}: Tidak ada order_list")
+                            # Tetap lanjutkan dengan data yang ada dari escrow detail
+                            ord_dtl = {}
+                        else:
+                            ord_dtl = ord_list[0]
                         
-                        ord_dtl = ord_list[0]
-                        
-                        # 🔴 DEBUG: Cek ord_dtl
-                        if idx == 0:
-                            with st.expander("🔍 Debug: Order Detail"):
-                                st.json(ord_dtl)
-                        
-                        # --- FORMATTING TANGGAL ---
-                        # Tanggal Released
+                        # 🔴 PERBAIKAN 4: Tanggal Released ambil dari escrow_list (lebih reliable)
+                        # Atau dari oi.get("escrow_release_time")
                         release_ts = oi.get("escrow_release_time")
                         if release_ts:
-                            # Konversi timestamp (detik) ke datetime
                             release_dt = datetime.datetime.fromtimestamp(release_ts).strftime('%Y-%m-%d')
                         else:
                             release_dt = ""
                         
-                        # Tanggal Order Dibuat
-                        create_ts = ord_dtl.get("create_time")
+                        # Format tanggal order
+                        create_ts = ord_dtl.get("create_time") if ord_dtl else None
                         if create_ts:
                             create_dt = datetime.datetime.fromtimestamp(create_ts).strftime('%Y-%m-%d %H:%M:%S')
                         else:
                             create_dt = ""
                         
-                        # --- AMBIL ITEM LIST ---
-                        items = ord_dtl.get("item_list", [])
-                        
-                        # --- HITUNG TOTAL DISKON ---
+                        # Hitung total diskon
                         seller_disc = oi.get("seller_discount", 0) or 0
                         shopee_disc = oi.get("shopee_discount", 0) or 0
                         total_disc = (seller_disc + shopee_disc) * -1
+                        
+                        # 🔴 PERBAIKAN 5: Mapping data - gunakan buyer_username dari escrow jika order detail kosong
+                        final_buyer_username = ord_dtl.get("buyer_username") if ord_dtl else buyer_username
                         
                         # --- MAPPING 41 KOLOM ---
                         row_data = {
                             "No.": idx + 1,
                             "No. Pesanan": sn,
                             "No. Pengajuan": "",
-                            "Username (Pembeli)": ord_dtl.get("buyer_username", ""),
+                            "Username (Pembeli)": final_buyer_username,
                             "Waktu Pesanan Dibuat": create_dt,
-                            "Metode pembayaran pembeli": ord_dtl.get("payment_method", ""),
+                            "Metode pembayaran pembeli": ord_dtl.get("payment_method", "") if ord_dtl else oi.get("buyer_payment_method", ""),
                             "Tanggal Dana Dilepaskan": release_dt,
-                            "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0) or 0,
+                            "Harga Asli Produk": oi.get("original_cost_of_goods_sold", 0) or oi.get("original_price", 0) or 0,
                             "Total Diskon Produk": total_disc,
                             "Jumlah Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0) or 0,
                             "Diskon Produk dari Shopee": shopee_disc,
@@ -733,7 +710,7 @@ with tab4:
                             "Biaya Komisi AMS": oi.get("order_ams_commission_fee", 0) or 0,
                             "Biaya Administrasi": oi.get("commission_fee", 0) or 0,
                             "Biaya Layanan": oi.get("service_fee", 0) or 0,
-                            "Biaya Proses Pesanan": oi.get("seller_transaction_fee", 0) or 0,
+                            "Biaya Proses Pesanan": oi.get("seller_transaction_fee", 0) or oi.get("seller_order_processing_fee", 0) or 0,
                             "Premi": oi.get("delivery_seller_protection_fee_premium_amount", 0) or 0,
                             "Biaya Program Hemat Biaya Kirim": 0,
                             "Biaya Transaksi": oi.get("seller_transaction_fee", 0) or 0,
@@ -743,13 +720,13 @@ with tab4:
                             "Kode Voucher": ",".join(oi.get("seller_voucher_code", [])) if oi.get("seller_voucher_code") else "",
                             "Kompensasi": oi.get("seller_lost_compensation", 0) or 0,
                             "Promo Gratis Ongkir dari Penjual": oi.get("seller_shipping_discount", 0) or 0,
-                            "Jasa Kirim": ord_dtl.get("shipping_carrier", ""),
-                            "Nama Kurir": ord_dtl.get("shipping_carrier", ""),
+                            "Jasa Kirim": ord_dtl.get("shipping_carrier", "") if ord_dtl else "",
+                            "Nama Kurir": ord_dtl.get("shipping_carrier", "") if ord_dtl else "",
                             "Pengembalian Dana ke Pembeli": oi.get("seller_return_refund", 0) or 0,
-                            "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": 0,
-                            "Pro-rata Voucher Shopee untuk Pengembalian Barang": 0,
-                            "Pro-rated Bank Payment Channel Promotion for return refund Items": 0,
-                            "Pro-rated Shopee Payment Channel Promotion for return refund Items": 0
+                            "Pro-rata Koin yang Ditukarkan untuk Pengembalian Barang": oi.get("prorated_coins_value_offset_return_items", 0) or 0,
+                            "Pro-rata Voucher Shopee untuk Pengembalian Barang": oi.get("prorated_shopee_voucher_offset_return_items", 0) or 0,
+                            "Pro-rated Bank Payment Channel Promotion for return refund Items": oi.get("prorated_payment_channel_promo_bank_offset_return_items", 0) or 0,
+                            "Pro-rated Shopee Payment Channel Promotion for return refund Items": oi.get("prorated_payment_channel_promo_shopee_offset_return_items", 0) or 0
                         }
                         
                         income_rows.append(row_data)
@@ -762,9 +739,7 @@ with tab4:
                         })
                         
                     except Exception as e:
-                        error_msg = f"Order {sn}: Exception - {str(e)}"
-                        error_list.append(error_msg)
-                        st.error(error_msg)
+                        st.error(f"❌ Error order {sn}: {str(e)}")
                         import traceback
                         st.code(traceback.format_exc())
                         continue
@@ -772,35 +747,28 @@ with tab4:
                 # --- HASIL AKHIR ---
                 status_text.empty()
                 
-                # 🔴 DEBUG: Cek hasil
-                st.write(f"🔍 Total income_rows: {len(income_rows)}")
-                st.write(f"🔍 Total errors: {len(error_list)}")
-                
-                if error_list:
-                    with st.expander(f"⚠️ Daftar Error ({len(error_list)})"):
-                        for err in error_list:
-                            st.write(f"- {err}")
+                st.write(f"📊 Total data berhasil: {len(income_rows)}")
+                st.write(f"📊 Total error: {len(all_sn_list) - len(income_rows)}")
                 
                 if income_rows:
                     df_inc = pd.DataFrame(income_rows)
                     df_srv = pd.DataFrame(service_rows)
                     
-                    # Sheet Processing Fee
+                    # Preview data
+                    st.subheader("📋 Preview Data Income")
+                    st.dataframe(df_inc.head(10))
+                    
+                    # Generate Excel
                     df_prc = df_inc[["No.", "No. Pesanan", "Biaya Proses Pesanan"]].copy()
                     df_prc["View By"] = "Order"
                     
-                    # 🔴 TAMPILKAN DATAFRAME LANGSUNG
-                    st.subheader("📋 Data Income Berhasil Dibuat")
-                    st.dataframe(df_inc)
-                    
-                    # Generate Excel
                     excel_file = create_income_excel(df_inc, df_srv, df_prc, selected_shop_inc, str(start_inc), str(end_inc))
                     
                     total_income = df_inc["Total Penghasilan"].sum()
                     range_inc_str = f"{start_inc} s/d {end_inc}"
 
                     save_report_to_db(selected_shop_inc, f"INCOME {range_inc_str}", excel_file)
-                    st.success(f"✅ Berhasil! {len(df_inc)} data, Total: Rp {total_income:,.0f}")
+                    st.success(f"✅ Berhasil! {len(df_inc)} data, Total Penghasilan: Rp {total_income:,.0f}")
                     
                     st.download_button(
                         label="📥 Download Excel",
@@ -810,8 +778,7 @@ with tab4:
                     )
                 else:
                     st.error("❌ Tidak ada data yang berhasil diproses.")
-                    st.info("Silakan periksa daftar error di atas untuk melihat penyebabnya.")
-                
+
  
             
             st.divider()
