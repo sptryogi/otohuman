@@ -6,10 +6,10 @@ import hashlib
 import urllib.parse
 import requests
 import pandas as pd
-import datetime
 import json
 import io
 import pytz
+import datetime as dt
 from datetime import datetime, timedelta, time as dt_time
 from supabase import create_client, Client
 
@@ -353,37 +353,38 @@ with tab3:
             )
         
         # Set default dates berdasarkan preset
-        today = datetime.date.today()
+        # 🔴 PERBAIKAN: Gunakan dt.date.today() bukan datetime.date.today()
+        today = dt.date.today()
         
         if preset_option == "Hari Ini":
             default_start = today
             default_end = today
         elif preset_option == "Kemarin":
-            default_start = today - timedelta(days=1)
-            default_end = today - timedelta(days=1)
+            default_start = today - dt.timedelta(days=1)
+            default_end = today - dt.timedelta(days=1)
         elif preset_option == "7 Hari Terakhir":
-            default_start = today - timedelta(days=7)
+            default_start = today - dt.timedelta(days=7)
             default_end = today
         elif preset_option == "30 Hari Terakhir":
-            default_start = today - timedelta(days=30)
+            default_start = today - dt.timedelta(days=30)
             default_end = today
         elif preset_option == "Minggu Ini":
             # Senin minggu ini
-            default_start = today - timedelta(days=today.weekday())
+            default_start = today - dt.timedelta(days=today.weekday())
             default_end = today
         elif preset_option == "Minggu Lalu":
             # Senin sampai Minggu minggu lalu
-            default_start = today - timedelta(days=today.weekday() + 7)
-            default_end = today - timedelta(days=today.weekday() + 1)
+            default_start = today - dt.timedelta(days=today.weekday() + 7)
+            default_end = today - dt.timedelta(days=today.weekday() + 1)
         elif preset_option == "Bulan Ini":
             default_start = today.replace(day=1)
             default_end = today
         elif preset_option == "Bulan Lalu":
-            last_month_end = today.replace(day=1) - timedelta(days=1)
+            last_month_end = today.replace(day=1) - dt.timedelta(days=1)
             default_start = last_month_end.replace(day=1)
             default_end = last_month_end
         else:  # Custom
-            default_start = today - timedelta(days=7)
+            default_start = today - dt.timedelta(days=7)
             default_end = today
         
         with col_custom:
@@ -397,6 +398,7 @@ with tab3:
         # Buat datetime dengan timezone Asia/Jakarta
         wib = pytz.timezone('Asia/Jakarta')
         
+        # 🔴 PERBAIKAN: Gunakan datetime.combine (bukan dt.datetime.combine)
         start_dt_wib = wib.localize(datetime.combine(start_date, dt_time.min))
         end_dt_wib = wib.localize(datetime.combine(end_date, dt_time.max))
         
@@ -667,7 +669,6 @@ with tab3:
                     key=item['id']
                 )
 
-
 # ==========================================
 # TAB 4: INCOME (DANA DILEPASKAN)
 # ==========================================
@@ -692,35 +693,36 @@ with tab4:
                 key="preset_income"
             )
         
-        today = datetime.date.today()
+        # 🔴 PERBAIKAN: Gunakan dt.date.today()
+        today = dt.date.today()
         
         if preset_inc == "Hari Ini":
             default_start_inc = today
             default_end_inc = today
         elif preset_inc == "Kemarin":
-            default_start_inc = today - timedelta(days=1)
-            default_end_inc = today - timedelta(days=1)
+            default_start_inc = today - dt.timedelta(days=1)
+            default_end_inc = today - dt.timedelta(days=1)
         elif preset_inc == "7 Hari Terakhir":
-            default_start_inc = today - timedelta(days=7)
+            default_start_inc = today - dt.timedelta(days=7)
             default_end_inc = today
         elif preset_inc == "30 Hari Terakhir":
-            default_start_inc = today - timedelta(days=30)
+            default_start_inc = today - dt.timedelta(days=30)
             default_end_inc = today
         elif preset_inc == "Minggu Ini":
-            default_start_inc = today - timedelta(days=today.weekday())
+            default_start_inc = today - dt.timedelta(days=today.weekday())
             default_end_inc = today
         elif preset_inc == "Minggu Lalu":
-            default_start_inc = today - timedelta(days=today.weekday() + 7)
-            default_end_inc = today - timedelta(days=today.weekday() + 1)
+            default_start_inc = today - dt.timedelta(days=today.weekday() + 7)
+            default_end_inc = today - dt.timedelta(days=today.weekday() + 1)
         elif preset_inc == "Bulan Ini":
             default_start_inc = today.replace(day=1)
             default_end_inc = today
         elif preset_inc == "Bulan Lalu":
-            last_month_end = today.replace(day=1) - timedelta(days=1)
+            last_month_end = today.replace(day=1) - dt.timedelta(days=1)
             default_start_inc = last_month_end.replace(day=1)
             default_end_inc = last_month_end
         else:
-            default_start_inc = today - timedelta(days=7)
+            default_start_inc = today - dt.timedelta(days=7)
             default_end_inc = today
         
         with col_custom_inc:
@@ -978,6 +980,7 @@ with tab4:
                     key=f"inc_{item['id']}"
                 )
 
+        
 with tab5:
     st.header("📢 Data Iklan Keseluruhan (Shopee Ads)")
     st.info("Mengambil data iklan menggunakan API Product Level (Campaign ID List, Setting Info, & Daily Performance).")
