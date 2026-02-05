@@ -35,10 +35,10 @@ BASE_URL = "https://partner.shopeemobile.com"
 # ===============================
 # CAPTURE REDIRECT PARAMS (OAUTH)
 # ===============================
-query_params = st.experimental_get_query_params()
+query_params = st.query_params
 
-oauth_code = query_params.get("code", [None])[0]
-oauth_shop_id = query_params.get("shop_id", [None])[0]
+oauth_code = query_params.get("code")
+oauth_shop_id = query_params.get("shop_id")
 
 # ===============================
 # SIGNATURE HELPERS
@@ -558,39 +558,38 @@ with tab4:
 
             # 3. AMBIL DAFTAR PESANAN CAIR (get_escrow_list)
             path_esc = "/api/v2/payment/get_escrow_list"
-            cursor = ""
+            page_no = 1
+            
             while True:
                 ts = int(time.time())
                 sign = generate_sign_full(path_esc, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
                 
-                # PERBAIKAN DI SINI:
-                # Jangan pakai release_time_from, tapi pakai time_range_field
+                # Gunakan parameter sesuai dokumentasi yang Anda kirim:
                 params = {
                     "partner_id": PARTNER_ID, 
                     "timestamp": ts, 
                     "access_token": ACTIVE_ACCESS_TOKEN,
                     "shop_id": int(ACTIVE_SHOP_ID), 
                     "sign": sign,
-                    "time_range_field": "release_time", # Memberitahu Shopee kita filter berdasar dana cair
-                    "time_from": time_from, 
-                    "time_to": time_to, 
-                    "page_size": 50, 
-                    "cursor": cursor
+                    "release_time_from": int(time.mktime(start_inc.timetuple())), 
+                    "release_time_to": int(time.mktime(end_inc.timetuple())) + 86399,
+                    "page_size": 40,
+                    "page_no": page_no
                 }
                 
                 try:
                     res = requests.get(BASE_URL + path_esc, params=params).json()
-                    # Shopee mengembalikan data dalam list 'escrow_list'
                     escrow_data = res.get("response", {}).get("escrow_list", [])
                     
                     if escrow_data:
                         for item in escrow_data:
-                            # Masukkan No. Pesanan ke list untuk ditarik detailnya nanti
                             all_sn_list.append(item["order_sn"])
                     
-                    if not res.get("response", {}).get("more"):
+                    # Cek apakah masih ada halaman berikutnya
+                    if not res.get("response", {}).get("more") or not escrow_data:
                         break
-                    cursor = res.get("response", {}).get("next_cursor", "")
+                        
+                    page_no += 1 # Naikkan halaman
                 except Exception as e:
                     st.error(f"Error saat tarik list: {e}")
                     break
