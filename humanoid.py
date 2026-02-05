@@ -562,23 +562,31 @@ with tab4:
             while True:
                 ts = int(time.time())
                 sign = generate_sign_full(path_esc, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+                
+                # PERBAIKAN DI SINI:
+                # Jangan pakai release_time_from, tapi pakai time_range_field
                 params = {
-                    "partner_id": PARTNER_ID, "timestamp": ts, "access_token": ACTIVE_ACCESS_TOKEN,
-                    "shop_id": int(ACTIVE_SHOP_ID), "sign": sign,
-                    "release_time_from": time_from, "release_time_to": time_to, 
-                    "page_size": 50, "cursor": cursor
+                    "partner_id": PARTNER_ID, 
+                    "timestamp": ts, 
+                    "access_token": ACTIVE_ACCESS_TOKEN,
+                    "shop_id": int(ACTIVE_SHOP_ID), 
+                    "sign": sign,
+                    "time_range_field": "release_time", # Memberitahu Shopee kita filter berdasar dana cair
+                    "time_from": time_from, 
+                    "time_to": time_to, 
+                    "page_size": 50, 
+                    "cursor": cursor
                 }
                 
                 try:
                     res = requests.get(BASE_URL + path_esc, params=params).json()
+                    # Shopee mengembalikan data dalam list 'escrow_list'
                     escrow_data = res.get("response", {}).get("escrow_list", [])
                     
                     if escrow_data:
                         for item in escrow_data:
-                            # Filter kembali di sini agar tanggalnya presisi sesuai input user
-                            r_date = datetime.datetime.fromtimestamp(item["release_time"]).date()
-                            if start_inc <= r_date <= end_inc:
-                                all_sn_list.append(item["order_sn"])
+                            # Masukkan No. Pesanan ke list untuk ditarik detailnya nanti
+                            all_sn_list.append(item["order_sn"])
                     
                     if not res.get("response", {}).get("more"):
                         break
