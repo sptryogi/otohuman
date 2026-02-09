@@ -10,7 +10,7 @@ import json
 import io
 import pytz
 import datetime as dt
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta, time as dt_time, date
 from supabase import create_client, Client
 
 # ===============================
@@ -578,15 +578,15 @@ with tab3:
 
         # 🔴 PERBAIKAN: Konversi ke timestamp dengan timezone WIB
         # Buat datetime dengan timezone Asia/Jakarta
-        wib = pytz.timezone('Asia/Jakarta')
+        start_dt_wib = WIB.localize(datetime.combine(start_date, dt_time.min))
+        end_dt_wib = WIB.localize(datetime.combine(end_date, dt_time.max))
         
-        # 🔴 PERBAIKAN: Gunakan datetime.combine (bukan dt.datetime.combine)
-        start_dt_wib = wib.localize(datetime.combine(start_date, dt_time.min))
-        end_dt_wib = wib.localize(datetime.combine(end_date, dt_time.max))
+        # ✅ PERBAIKAN: Konversi ke UTC untuk API Shopee (API menggunakan UTC)
+        time_from = int(start_dt_wib.astimezone(UTC).timestamp())
+        time_to = int(end_dt_wib.astimezone(UTC).timestamp())
         
-        # Konversi ke UTC untuk API (Shopee API pakai UTC)
-        time_from = int(start_dt_wib.astimezone(pytz.UTC).timestamp())
-        time_to = int(end_dt_wib.astimezone(pytz.UTC).timestamp())
+        # Debug untuk verifikasi
+        st.caption(f"🕐 WIB: {start_dt_wib.strftime('%Y-%m-%d %H:%M')} s/d {end_dt_wib.strftime('%Y-%m-%d %H:%M')} | UTC Timestamp: {time_from} - {time_to}")
 
         if st.button("📥 Tarik Order-all", type="primary"):
             token_row = get_shop_token(selected_shop)
@@ -927,14 +927,12 @@ with tab4:
             service_rows = []
             
             # 🔴 PERBAIKAN: Konversi waktu dengan timezone WIB
-            wib = pytz.timezone('Asia/Jakarta')
+            start_dt_wib = WIB.localize(datetime.combine(start_inc, dt_time.min))
+            end_dt_wib = WIB.localize(datetime.combine(end_inc, dt_time.max))
             
-            start_dt_wib = wib.localize(datetime.combine(start_inc, dt_time.min))
-            end_dt_wib = wib.localize(datetime.combine(end_inc, dt_time.max))
-            
-            # Konversi ke UTC timestamp untuk API
-            time_from = int(start_dt_wib.astimezone(pytz.UTC).timestamp())
-            time_to = int(end_dt_wib.astimezone(pytz.UTC).timestamp())
+            # ✅ PERBAIKAN: Konversi ke UTC timestamp untuk API Shopee
+            time_from = int(start_dt_wib.astimezone(UTC).timestamp())
+            time_to = int(end_dt_wib.astimezone(UTC).timestamp())
             
             status_text.info(f"🔍 Mencari dana dilepaskan: {start_inc} s/d {end_inc} (WIB)")
 
@@ -1611,10 +1609,7 @@ with tab7:
     st.header("🕒 Performa Iklan Per Jam")
     st.info("Data performa iklan seluruh toko berdasarkan jam (00:00 - 23:00) dengan timezone WIB (UTC+7).")
 
-    from datetime import datetime, timedelta
-
-    tz_jkt = pytz.timezone('Asia/Jakarta')
-    now_jkt = datetime.now(tz_jkt)
+    now_jkt = datetime.now(WIB)
     yesterday_jkt = (now_jkt - timedelta(days=1)).date()
 
     if not shop_names:
@@ -1622,7 +1617,7 @@ with tab7:
     else:
         selected_shop_hourly = st.selectbox("Pilih Toko", shop_names, key="shop_hourly_v2")
         
-        # 🔴 PERBAIKAN: Pilihan preset tanggal
+        # ✅ PERBAIKAN: Pilihan preset tanggal
         st.subheader("📅 Pilih Tanggal")
         col_preset, col_custom = st.columns([1, 2])
         
@@ -1633,7 +1628,7 @@ with tab7:
                 key="preset_hourly"
             )
         
-        # Set default date berdasarkan preset
+        # ✅ Set default date berdasarkan preset menggunakan WIB
         today_wib = now_jkt.date()
         
         if preset_hourly == "Hari Ini":
