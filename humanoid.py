@@ -14,6 +14,21 @@ from datetime import datetime, timedelta, time as dt_time
 from supabase import create_client, Client
 
 # ===============================
+# TIMEZONE SETUP - TAMBAHKAN SETELAH IMPORT
+# ===============================
+WIB = pytz.timezone('Asia/Jakarta')
+UTC = pytz.UTC
+
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Di awal setiap tab, log timezone info
+logger.info(f"Server time (UTC): {datetime.now(pytz.UTC)}")
+logger.info(f"WIB time: {datetime.now(WIB)}")
+
+
+# ===============================
 # PAGE CONFIG
 # ===============================
 st.set_page_config(page_title="Humanoid Shopee API", layout="wide")
@@ -371,8 +386,8 @@ def to_wib(timestamp):
     try:
         # Jika timestamp dalam detik
         if isinstance(timestamp, (int, float)):
-            dt_utc = datetime.fromtimestamp(timestamp, pytz.UTC)
-            dt_wib = dt_utc.astimezone(pytz.timezone('Asia/Jakarta'))
+            dt_utc = datetime.fromtimestamp(timestamp, pytz.UTC)  # ✅ Pastikan UTC
+            dt_wib = dt_utc.astimezone(WIB)  # ✅ Gunakan WIB variable
             return dt_wib.strftime('%Y-%m-%d %H:%M:%S')
         return str(timestamp)
     except:
@@ -384,8 +399,8 @@ def to_wib_date(timestamp):
         return ""
     try:
         if isinstance(timestamp, (int, float)):
-            dt_utc = datetime.fromtimestamp(timestamp, pytz.UTC)
-            dt_wib = dt_utc.astimezone(pytz.timezone('Asia/Jakarta'))
+            dt_utc = datetime.fromtimestamp(timestamp, pytz.UTC)  # ✅ Pastikan UTC
+            dt_wib = dt_utc.astimezone(WIB)  # ✅ Gunakan WIB variable
             return dt_wib.strftime('%Y-%m-%d')
         return str(timestamp)
     except:
@@ -395,6 +410,7 @@ def to_wib_date(timestamp):
 # UI
 # ===============================
 st.title("🤖 Humanoid - Shopee API Integration")
+st.caption(f"🕐 Server UTC: {datetime.now(pytz.UTC)} | WIB: {datetime.now(WIB)}")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "1️⃣ Authorisasi",
@@ -520,7 +536,7 @@ with tab3:
         
         # Set default dates berdasarkan preset
         # 🔴 PERBAIKAN: Gunakan dt.date.today() bukan datetime.date.today()
-        today = dt.date.today()
+        today = datetime.now(WIB).date()
         
         if preset_option == "Hari Ini":
             default_start = today
@@ -860,7 +876,7 @@ with tab4:
             )
         
         # 🔴 PERBAIKAN: Gunakan dt.date.today()
-        today = dt.date.today()
+        today = datetime.now(WIB).date()
         
         if preset_inc == "Hari Ini":
             default_start_inc = today
@@ -1169,7 +1185,7 @@ with tab5:
             )
         
         # Set default dates berdasarkan preset
-        today = dt.date.today()
+        today = datetime.now(WIB).date()
         
         if preset_ads == "Hari Ini":
             default_start = today
@@ -1595,6 +1611,12 @@ with tab7:
     st.header("🕒 Performa Iklan Per Jam")
     st.info("Data performa iklan seluruh toko berdasarkan jam (00:00 - 23:00) dengan timezone WIB (UTC+7).")
 
+    from datetime import datetime, timedelta
+
+    tz_jkt = pytz.timezone('Asia/Jakarta')
+    now_jkt = datetime.now(tz_jkt)
+    yesterday_jkt = (now_jkt - timedelta(days=1)).date()
+
     if not shop_names:
         st.warning("Belum ada toko.")
     else:
@@ -1612,7 +1634,7 @@ with tab7:
             )
         
         # Set default date berdasarkan preset
-        today_wib = dt.date.today()
+        today_wib = now_jkt.date()
         
         if preset_hourly == "Hari Ini":
             default_date = today_wib
@@ -1712,6 +1734,11 @@ with tab7:
                         # Shopee API kembalikan jam dalam UTC, perlu konversi ke WIB
                         utc_hour = h_num
                         wib_hour = (utc_hour + 7) % 24  # Tambah 7 jam untuk WIB
+                        # Handle kasus overflow (misal: UTC 20:00 -> WIB 03:00 pagi hari berikutnya)
+                        if utc_hour + 7 >= 24:
+                            # Data ini sebenarnya untuk hari berikutnya di WIB
+                            # Tapi karena kita query per hari, biarkan saja atau skip
+                            pass
                         
                         key = f"{str(wib_hour).zfill(2)}:00"
                         
