@@ -1384,8 +1384,8 @@ with tab5:
                             raw_status = common.get("campaign_status", "unknown")
                             status_indo = status_map.get(raw_status, raw_status)
 
-                            if status_indo != "Berjalan":
-                                continue
+                            # if status_indo != "Berjalan":
+                            #     continue
                             
                             # Mode Bidding
                             bidding_method = common.get("bidding_method", "")
@@ -1405,9 +1405,9 @@ with tab5:
                             
                             if start_timestamp:
                                 start_dt_wib = datetime.fromtimestamp(start_timestamp, pytz.UTC).astimezone(pytz.timezone('Asia/Jakarta'))
-                                tanggal_mulai = start_dt_wib.strftime('%Y-%m-%d')
+                                tanggal_mulai = start_dt_wib.strftime('%d/%m/%Y %H:%M:%S')
                             else:
-                                tanggal_mulai = start_ads.strftime('%Y-%m-%d')
+                                tanggal_mulai = start_ads.strftime('%d/%m/%Y %H:%M:%S')
                             
                             if end_timestamp and end_timestamp != 0:
                                 end_dt_wib = datetime.fromtimestamp(end_timestamp, pytz.UTC).astimezone(pytz.timezone('Asia/Jakarta'))
@@ -1453,29 +1453,29 @@ with tab5:
                                 "Status": status_indo,
                                 "Jenis Iklan": "Iklan Produk",
                                 "Kode Produk": kode_produk,
-                                "Tampilan Iklan": t_imp,
+                                "Tampilan Iklan": "-" if t_imp == 0 else t_imp,
                                 "Mode Bidding": mode_bidding,
                                 "Penempatan Iklan": placement_indo,
                                 "Tanggal Mulai": tanggal_mulai,
                                 "Tanggal Selesai": tanggal_selesai,
                                 "Dilihat": t_imp,
                                 "Jumlah Klik": t_cli,
-                                "Persentase Klik": f"{round(ctr, 2)}%",
+                                "Persentase Klik": f"{ctr:.2f}%",
                                 "Konversi": t_ord,
                                 "Konversi Langsung": d_ord,
-                                "Tingkat konversi": f"{round(cvr, 2)}%",
-                                "Tingkat Konversi Langsung": f"{round(cvr_direct, 2)}%",
-                                "Biaya per Konversi": round(biaya_per_konversi, 2),
-                                "Biaya per Konversi Langsung": round(biaya_per_konversi_direct, 2),
+                                "Tingkat konversi": f"{cvr:.2f}%",
+                                "Tingkat Konversi Langsung": f"{cvr_direct:.2f}%",
+                                "Biaya per Konversi": f"{biaya_per_konversi:.2f}",
+                                "Biaya per Konversi Langsung": f"{biaya_per_konversi_direct:.2f}",
                                 "Produk Terjual": t_sold,
                                 "Terjual Langsung": d_sold,
                                 "Omzet Penjualan": round(t_gmv, 0),
                                 "Penjualan Langsung (GMV Langsung)": round(d_gmv, 0),
                                 "Biaya": round(t_exp, 0),
-                                "Efektifitas Iklan": round(roas, 2),
-                                "Efektivitas Langsung": round(roas_direct, 2),
-                                "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{round(acos, 2)}%",
-                                "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{round(acos_direct, 2)}%",
+                                "Efektifitas Iklan": f"{roas:.2f}",
+                                "Efektivitas Langsung": f"{roas_direct:.2f}",
+                                "Persentase Biaya Iklan terhadap Penjualan dari Iklan (ACOS)": f"{acos:.2f}%",
+                                "Persentase Biaya Iklan terhadap Penjualan dari Iklan Langsung (ACOS Langsung)": f"{acos_direct:.2f}%",
                                 "Jumlah Produk Dilihat": t_imp,
                                 "Jumlah Klik Produk": t_cli,
                                 "Persentase Klik Produk": f"{round(ctr, 2)}%"
