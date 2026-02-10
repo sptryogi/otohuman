@@ -578,12 +578,19 @@ with tab3:
 
         # 🔴 PERBAIKAN: Konversi ke timestamp dengan timezone WIB
         # Buat datetime dengan timezone Asia/Jakarta
+        # start_dt_wib = WIB.localize(datetime.combine(start_date, dt_time.min))
+        # end_dt_wib = WIB.localize(datetime.combine(end_date, dt_time.max))
+        
+        # # ✅ PERBAIKAN: Konversi ke UTC untuk API Shopee (API menggunakan UTC)
+        # time_from = int(start_dt_wib.astimezone(UTC).timestamp())
+        # time_to = int(end_dt_wib.astimezone(UTC).timestamp())
         start_dt_wib = WIB.localize(datetime.combine(start_date, dt_time.min))
         end_dt_wib = WIB.localize(datetime.combine(end_date, dt_time.max))
         
         # ✅ PERBAIKAN: Konversi ke UTC untuk API Shopee (API menggunakan UTC)
-        time_from = int(start_dt_wib.astimezone(UTC).timestamp())
-        time_to = int(end_dt_wib.astimezone(UTC).timestamp())
+        # TAMBAHKAN buffer -7 jam di awal dan +7 jam di akhir untuk menangkap pesanan di batas waktu
+        time_from = int(start_dt_wib.astimezone(UTC).timestamp()) - (7 * 3600)  # -7 jam
+        time_to = int(end_dt_wib.astimezone(UTC).timestamp()) + (7 * 3600)
         
         # Debug untuk verifikasi
         st.caption(f"🕐 WIB: {start_dt_wib.strftime('%Y-%m-%d %H:%M')} s/d {end_dt_wib.strftime('%Y-%m-%d %H:%M')} | UTC Timestamp: {time_from} - {time_to}")
@@ -927,12 +934,18 @@ with tab4:
             service_rows = []
             
             # 🔴 PERBAIKAN: Konversi waktu dengan timezone WIB
+            # start_dt_wib = WIB.localize(datetime.combine(start_inc, dt_time.min))
+            # end_dt_wib = WIB.localize(datetime.combine(end_inc, dt_time.max))
+            
+            # # ✅ PERBAIKAN: Konversi ke UTC timestamp untuk API Shopee
+            # time_from = int(start_dt_wib.astimezone(UTC).timestamp())
+            # time_to = int(end_dt_wib.astimezone(UTC).timestamp())
             start_dt_wib = WIB.localize(datetime.combine(start_inc, dt_time.min))
             end_dt_wib = WIB.localize(datetime.combine(end_inc, dt_time.max))
             
-            # ✅ PERBAIKAN: Konversi ke UTC timestamp untuk API Shopee
-            time_from = int(start_dt_wib.astimezone(UTC).timestamp())
-            time_to = int(end_dt_wib.astimezone(UTC).timestamp())
+            # ✅ PERBAIKAN: Konversi ke UTC timestamp untuk API Shopee dengan buffer
+            time_from = int(start_dt_wib.astimezone(UTC).timestamp()) - (7 * 3600)  # -7 jam
+            time_to = int(end_dt_wib.astimezone(UTC).timestamp()) + (7 * 3600)
             
             status_text.info(f"🔍 Mencari dana dilepaskan: {start_inc} s/d {end_inc} (WIB)")
 
@@ -1232,8 +1245,13 @@ with tab5:
         st.caption(f"🕐 Periode: {start_ads} s/d {end_ads} (WIB - UTC+7)")
         
         # Konversi ke format string untuk API (DD-MM-YYYY)
-        s_date_str = start_ads.strftime("%d-%m-%Y")
-        e_date_str = end_ads.strftime("%d-%m-%Y")
+        # s_date_str = start_ads.strftime("%d-%m-%Y")
+        # e_date_str = end_ads.strftime("%d-%m-%Y")
+        start_ads_buffer = start_ads - dt.timedelta(days=1)
+        end_ads_buffer = end_ads + dt.timedelta(days=1)
+        
+        s_date_str = start_ads_buffer.strftime("%d-%m-%Y")
+        e_date_str = end_ads_buffer.strftime("%d-%m-%Y")
 
         # Mapping untuk display
         status_map = {
@@ -1664,7 +1682,9 @@ with tab7:
             # Progress indicator
             with st.spinner("🔄 Mengambil data performa per jam..."):
                 # Format tanggal DD-MM-YYYY untuk API (tetap sama, API internal Shopee pakai UTC)
-                date_str = target_date.strftime("%d-%m-%Y")
+                # date_str = target_date.strftime("%d-%m-%Y")
+                date_buffer = target_date - dt.timedelta(days=1)
+                date_str = date_buffer.strftime("%d-%m-%Y")
                 ts_ads = int(time.time())
 
                 path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
