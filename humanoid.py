@@ -1669,163 +1669,101 @@ with tab7:
 
             # Progress indicator
             with st.spinner("🔄 Mengambil data performa per jam..."):
-                target_date_str = target_date.strftime("%d-%m-%Y")
-                yest_date_str = (target_date - timedelta(days=1)).strftime("%d-%m-%Y")
                 
-                # Fungsi helper untuk request API agar tidak duplikasi kode
-                def fetch_ads_hourly(d_str):
-                    ts = int(time.time())
-                    p = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
-                    s = generate_sign_full(p, ts, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-                    params = {
-                        "partner_id": int(PARTNER_ID), "timestamp": ts,
-                        "access_token": ACTIVE_ACCESS_TOKEN, "shop_id": int(ACTIVE_SHOP_ID),
-                        "sign": s, "performance_date": d_str
+                # Format tanggal DD-MM-YYYY untuk API (tetap sama, API internal Shopee pakai UTC)
+                date_str = target_date.strftime("%d-%m-%Y")
+                ts_ads = int(time.time())
+
+                path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
+                sign_hourly = generate_sign_full(path_hourly, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
+
+                params_hourly = {
+                    "partner_id": int(PARTNER_ID),
+                    "timestamp": ts_ads,
+                    "access_token": ACTIVE_ACCESS_TOKEN,
+                    "shop_id": int(ACTIVE_SHOP_ID),
+                    "sign": sign_hourly,
+                    "performance_date": date_str  
+                }
+
+                try:
+                    res_hourly = requests.get(
+                        BASE_URL + path_hourly, 
+                        params=params_hourly, 
+                        timeout=30
+                    ).json()
+                except Exception as e:
+                    st.error(f"❌ Error fetching data: {str(e)}")
+                    st.stop()
+
+                if res_hourly.get("error"):
+                    error_msg = res_hourly.get("message", "Unknown error")
+                    st.error(f"❌ Error dari Shopee API: {error_msg}")
+                    
+                    # Debug info
+                    with st.expander("🔍 Debug Response"):
+                        st.json(res_hourly)
+                    st.stop()
+
+                # Ambil data response
+                hourly_list = res_hourly.get("response", [])
+
+                if not hourly_list:
+                    st.warning(f"⚠️ Tidak ada data iklan untuk tanggal {date_str} (WIB).")
+                    st.info("💡 Tips: Coba pilih tanggal lain atau cek apakah ada iklan aktif pada tanggal tersebut.")
+                    st.stop()
+                
+                # 🔴 PERBAIKAN: Proses data dengan timezone WIB
+                # Buat template 24 jam (00:00 - 23:00 WIB)
+                hourly_data_map = {}
+                for h in range(24):
+                    wib_time = f"{str(h).zfill(2)}:00"
+                    hourly_data_map[wib_time] = {
+                        "Jam WIB": wib_time,
+                        "Lihat": 0,
+                        "Klik": 0,
+                        "Biaya": 0.0,
+                        "CTR (%)": 0.0,
+                        "CPC": 0.0
                     }
-                    return requests.get(BASE_URL + p, params=params, timeout=30).json()
-
-                # Tarik data hari ini dan kemarin
-                res_today = fetch_ads_hourly(target_date_str)
-                res_yest = fetch_ads_hourly(yest_date_str)
-
-                # Gabungkan list response
-                today_list = res_today.get("response", [])
-                yest_list = res_yest.get("response", [])
-
-                # Template 24 jam WIB
-                hourly_data_map = {f"{str(h).zfill(2)}:00": {
-                    "Jam WIB": f"{str(h).zfill(2)}:00", "Lihat": 0, "Klik": 0, "Biaya": 0.0, "CTR (%)": 0.0, "CPC": 0.0
-                } for h in range(24)}
 
                 total_impression = total_clicks = total_expense = 0
-
-                # 1. Proses data Kemarin (Ambil jam 17-23 UTC -> Jadi 00-06 WIB hari ini)
-                for data in yest_list:
-                    utc_h = data.get("hour")
-                    if utc_h is not None and 17 <= utc_h <= 23:
-                        wib_h = (utc_h + 7) % 24
-                        key = f"{str(wib_h).zfill(2)}:00"
-                        
-                        hourly_data_map[key]["Lihat"] = data.get("impression", 0)
-                        hourly_data_map[key]["Klik"] = data.get("clicks", 0)
-                        hourly_data_map[key]["Biaya"] = data.get("expense", 0)
-                        
-                        total_impression += data.get("impression", 0)
-                        total_clicks += data.get("clicks", 0)
-                        total_expense += data.get("expense", 0)
-
-                # 2. Proses data Hari Ini (Ambil jam 00-16 UTC -> Jadi 07-23 WIB hari ini)
-                for data in today_list:
-                    utc_h = data.get("hour")
-                    if utc_h is not None and 0 <= utc_h <= 16:
-                        wib_h = utc_h + 7
-                        key = f"{str(wib_h).zfill(2)}:00"
-                        
-                        hourly_data_map[key]["Lihat"] = data.get("impression", 0)
-                        hourly_data_map[key]["Klik"] = data.get("clicks", 0)
-                        hourly_data_map[key]["Biaya"] = data.get("expense", 0)
-                        
-                        total_impression += data.get("impression", 0)
-                        total_clicks += data.get("clicks", 0)
-                        total_expense += data.get("expense", 0)
-
-                # 3. Hitung CTR & CPC setelah data tergabung
-                for key in hourly_data_map:
-                    item = hourly_data_map[key]
-                    item["CTR (%)"] = round((item["Klik"] / item["Lihat"] * 100), 2) if item["Lihat"] > 0 else 0
-                    item["CPC"] = round((item["Biaya"] / item["Klik"]), 0) if item["Klik"] > 0 else 0
-                # Format tanggal DD-MM-YYYY untuk API (tetap sama, API internal Shopee pakai UTC)
-                # date_str = target_date.strftime("%d-%m-%Y")
-                # ts_ads = int(time.time())
-
-                # path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
-                # sign_hourly = generate_sign_full(path_hourly, ts_ads, ACTIVE_ACCESS_TOKEN, ACTIVE_SHOP_ID)
-
-                # params_hourly = {
-                #     "partner_id": int(PARTNER_ID),
-                #     "timestamp": ts_ads,
-                #     "access_token": ACTIVE_ACCESS_TOKEN,
-                #     "shop_id": int(ACTIVE_SHOP_ID),
-                #     "sign": sign_hourly,
-                #     "performance_date": date_str  
-                # }
-
-                # try:
-                #     res_hourly = requests.get(
-                #         BASE_URL + path_hourly, 
-                #         params=params_hourly, 
-                #         timeout=30
-                #     ).json()
-                # except Exception as e:
-                #     st.error(f"❌ Error fetching data: {str(e)}")
-                #     st.stop()
-
-                # if res_hourly.get("error"):
-                #     error_msg = res_hourly.get("message", "Unknown error")
-                #     st.error(f"❌ Error dari Shopee API: {error_msg}")
-                    
-                #     # Debug info
-                #     with st.expander("🔍 Debug Response"):
-                #         st.json(res_hourly)
-                #     st.stop()
-
-                # # Ambil data response
-                # hourly_list = res_hourly.get("response", [])
-
-                # if not hourly_list:
-                #     st.warning(f"⚠️ Tidak ada data iklan untuk tanggal {date_str} (WIB).")
-                #     st.info("💡 Tips: Coba pilih tanggal lain atau cek apakah ada iklan aktif pada tanggal tersebut.")
-                #     st.stop()
                 
-                # # 🔴 PERBAIKAN: Proses data dengan timezone WIB
-                # # Buat template 24 jam (00:00 - 23:00 WIB)
-                # hourly_data_map = {}
-                # for h in range(24):
-                #     wib_time = f"{str(h).zfill(2)}:00"
-                #     hourly_data_map[wib_time] = {
-                #         "Jam WIB": wib_time,
-                #         "Lihat": 0,
-                #         "Klik": 0,
-                #         "Biaya": 0.0,
-                #         "CTR (%)": 0.0,
-                #         "CPC": 0.0
-                #     }
-
-                # total_impression = total_clicks = total_expense = 0
-                
-                # for data in hourly_list:
-                #     h_num = data.get("hour")
-                #     if h_num is not None and 0 <= h_num <= 23:
-                #         # Konversi jam UTC ke WIB (UTC+7)
-                #         # Shopee API kembalikan jam dalam UTC, perlu konversi ke WIB
-                #         utc_hour = h_num
-                #         wib_hour = (utc_hour + 7) % 24  # Tambah 7 jam untuk WIB
-                #         # Handle kasus overflow (misal: UTC 20:00 -> WIB 03:00 pagi hari berikutnya)
-                #         if utc_hour + 7 >= 24:
-                #             # Data ini sebenarnya untuk hari berikutnya di WIB
-                #             # Tapi karena kita query per hari, biarkan saja atau skip
-                #             pass
+                for data in hourly_list:
+                    h_num = data.get("hour")
+                    if h_num is not None and 0 <= h_num <= 23:
+                        # Konversi jam UTC ke WIB (UTC+7)
+                        # Shopee API kembalikan jam dalam UTC, perlu konversi ke WIB
+                        # utc_hour = h_num
+                        # wib_hour = (utc_hour + 7) % 24
+                        wib_hour = h_num
+                        # Handle kasus overflow (misal: UTC 20:00 -> WIB 03:00 pagi hari berikutnya)
+                        # if utc_hour + 7 >= 24:
+                        if wib_hour + 7 >= 24:
+                            # Data ini sebenarnya untuk hari berikutnya di WIB
+                            # Tapi karena kita query per hari, biarkan saja atau skip
+                            pass
                         
-                #         key = f"{str(wib_hour).zfill(2)}:00"
+                        key = f"{str(wib_hour).zfill(2)}:00"
                         
-                #         impression = data.get("impression", 0) or 0
-                #         clicks = data.get("clicks", 0) or 0
-                #         expense = data.get("expense", 0) or 0
+                        impression = data.get("impression", 0) or 0
+                        clicks = data.get("clicks", 0) or 0
+                        expense = data.get("expense", 0) or 0
                         
-                #         hourly_data_map[key]["Lihat"] = impression
-                #         hourly_data_map[key]["Klik"] = clicks
-                #         hourly_data_map[key]["Biaya"] = expense
+                        hourly_data_map[key]["Lihat"] = impression
+                        hourly_data_map[key]["Klik"] = clicks
+                        hourly_data_map[key]["Biaya"] = expense
                         
-                #         # Hitung metrik turunan
-                #         ctr = (clicks / impression * 100) if impression > 0 else 0
-                #         cpc = (expense / clicks) if clicks > 0 else 0
+                        # Hitung metrik turunan
+                        ctr = (clicks / impression * 100) if impression > 0 else 0
+                        cpc = (expense / clicks) if clicks > 0 else 0
                         
-                #         hourly_data_map[key]["CTR (%)"] = round(ctr, 2)
-                #         hourly_data_map[key]["CPC"] = round(cpc, 0)
+                        hourly_data_map[key]["CTR (%)"] = round(ctr, 2)
+                        hourly_data_map[key]["CPC"] = round(cpc, 0)
                         
-                #         total_impression += impression
-                #         total_clicks += clicks
-                #         total_expense += expense
+                        total_impression += impression
+                        total_clicks += clicks
+                        total_expense += expense
 
                 # Susun DataFrame (urut berdasarkan jam 00-23)
                 rows_hourly = []
