@@ -1384,8 +1384,8 @@ with tab5:
                             raw_status = common.get("campaign_status", "unknown")
                             status_indo = status_map.get(raw_status, raw_status)
 
-                            if status_indo != "Berjalan":
-                                continue
+                            # if status_indo != "Berjalan":
+                            #     continue
                             
                             # Mode Bidding
                             bidding_method = common.get("bidding_method", "")
