@@ -1734,12 +1734,12 @@ with tab7:
                         # Konversi jam UTC ke WIB (UTC+7)
                         # Shopee API kembalikan jam dalam UTC, perlu konversi ke WIB
                         utc_hour = h_num
-                        wib_hour = (utc_hour + 7) % 24  # Tambah 7 jam untuk WIB
+                        wib_hour = (utc_hour - 7) % 24  # Tambah 7 jam untuk WIB
                         # Handle kasus overflow (misal: UTC 20:00 -> WIB 03:00 pagi hari berikutnya)
-                        if utc_hour + 7 >= 24:
-                            # Data ini sebenarnya untuk hari berikutnya di WIB
-                            # Tapi karena kita query per hari, biarkan saja atau skip
-                            pass
+                        # if utc_hour - 7 >= 24:
+                        #     # Data ini sebenarnya untuk hari berikutnya di WIB
+                        #     # Tapi karena kita query per hari, biarkan saja atau skip
+                        #     pass
                         
                         key = f"{str(wib_hour).zfill(2)}:00"
                         
