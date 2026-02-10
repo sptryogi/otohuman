@@ -1670,7 +1670,10 @@ with tab7:
             # Progress indicator
             with st.spinner("🔄 Mengambil data performa per jam..."):
                 # Format tanggal DD-MM-YYYY untuk API (tetap sama, API internal Shopee pakai UTC)
-                date_str = target_date.strftime("%d-%m-%Y")
+                # date_str = target_date.strftime("%d-%m-%Y")
+                target_datetime_wib = datetime.combine(target_date, datetime.min.time())
+                target_datetime_utc = target_datetime_wib - timedelta(hours=7)
+                date_str = target_datetime_utc.strftime("%d-%m-%Y")
                 ts_ads = int(time.time())
 
                 path_hourly = "/api/v2/ads/get_all_cpc_ads_hourly_performance"
@@ -1733,13 +1736,21 @@ with tab7:
                     if h_num is not None and 0 <= h_num <= 23:
                         # Konversi jam UTC ke WIB (UTC+7)
                         # Shopee API kembalikan jam dalam UTC, perlu konversi ke WIB
-                        utc_hour = h_num
-                        wib_hour = (utc_hour - 7) % 24  # Tambah 7 jam untuk WIB
-                        # Handle kasus overflow (misal: UTC 20:00 -> WIB 03:00 pagi hari berikutnya)
-                        # if utc_hour - 7 >= 24:
+                        # utc_hour = h_num
+                        # wib_hour = (utc_hour + 7) % 24  # Tambah 7 jam untuk WIB
+                        # # Handle kasus overflow (misal: UTC 20:00 -> WIB 03:00 pagi hari berikutnya)
+                        # if utc_hour + 7 >= 24:
                         #     # Data ini sebenarnya untuk hari berikutnya di WIB
                         #     # Tapi karena kita query per hari, biarkan saja atau skip
                         #     pass
+                        
+                        # key = f"{str(wib_hour).zfill(2)}:00"
+                        utc_hour = h_num
+                        wib_hour = utc_hour + 7
+                        
+                        # Handle overflow (>= 24 berarti hari berikutnya, tapi kita query per hari)
+                        if wib_hour >= 24:
+                            wib_hour = wib_hour - 24
                         
                         key = f"{str(wib_hour).zfill(2)}:00"
                         
