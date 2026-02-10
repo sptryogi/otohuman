@@ -1441,6 +1441,9 @@ with tab5:
                             roas = (t_gmv / t_exp) if t_exp > 0 else 0
                             roas_direct = (d_gmv / t_exp) if t_exp > 0 else 0
                             cpc = (t_exp / t_cli) if t_cli > 0 else 0
+
+                            if t_imp == 0 and t_cli == 0:
+                                continue
                             
                             # Biaya per konversi
                             biaya_per_konversi = (t_exp / t_ord) if t_ord > 0 else 0
