@@ -190,7 +190,7 @@ def get_auth_url(partner_id: str = None, partner_key: str = None, redirect_uri: 
     # Ambil dari secrets jika tidak disediakan parameter
     partner_id = partner_id or st.secrets["SHOPEE_PARTNER_ID"]
     partner_key = partner_id or st.secrets["SHOPEE_PARTNER_KEY"]
-    redirect_uri = redirect_uri or st.secrets["SHOPEE_REDIRECT_URI"]
+    redirect_uri = redirect_uri or st.secrets["SHOPEE_REDIRECT_URL"]
     
     timestamp = int(datetime.now().timestamp())
     api_path = "/api/v2/shop/auth_partner"
