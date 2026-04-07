@@ -36,9 +36,23 @@ def init_supabase():
 def generate_sign(partner_id: str, api_path: str, timestamp: int, access_token: str = "", shop_id: int = 0, partner_key: str = ""):
     """
     Generate signature untuk Shopee API v2
+    Format: partner_id + api_path + timestamp + access_token + shop_id
     """
-    base_str = f"{partner_id}{api_path}{timestamp}{access_token}{shop_id}"
-    sign = hmac.new(partner_key.encode(), base_str.encode(), hashlib.sha256).hexdigest()
+    # Pastikan semua dalam string
+    partner_id_str = str(partner_id)
+    timestamp_str = str(timestamp)
+    access_token_str = str(access_token) if access_token else ""
+    shop_id_str = str(shop_id) if shop_id else ""
+    
+    # Base string untuk signature sesuai dokumen Shopee
+    base_str = f"{partner_id_str}{api_path}{timestamp_str}{access_token_str}{shop_id_str}"
+    
+    sign = hmac.new(
+        partner_key.encode('utf-8'), 
+        base_str.encode('utf-8'), 
+        hashlib.sha256
+    ).hexdigest()
+    
     return sign
 
 def get_last_day_of_previous_months(current_date: datetime, months_back: int = 6):
@@ -81,7 +95,7 @@ class ShopeeAPI:
         """Base method untuk membuat request ke Shopee API"""
         timestamp = int(datetime.now().timestamp())
         
-        # Generate signature
+        # Generate signature - urutan penting!
         sign = generate_sign(
             partner_id=str(self.partner_id),
             api_path=api_path,
@@ -91,30 +105,42 @@ class ShopeeAPI:
             partner_key=self.partner_key
         )
         
-        # Build URL dengan query parameters
-        query_params = {
-            "partner_id": self.partner_id,
-            "timestamp": timestamp,
-            "sign": sign,
-            "access_token": self.access_token,
-            "shop_id": self.shop_id
-        }
+        # Build query parameters - URUTAN HARUS BENAR!
+        query_params = [
+            ("partner_id", self.partner_id),
+            ("timestamp", timestamp),
+            ("sign", sign),
+        ]
         
+        # Tambahkan access_token dan shop_id hanya jika ada nilainya
+        if self.access_token:
+            query_params.append(("access_token", self.access_token))
+        if self.shop_id:
+            query_params.append(("shop_id", self.shop_id))
+        
+        # Tambahkan parameter lainnya
         if params:
-            query_params.update(params)
+            for key, value in params.items():
+                if value is not None:
+                    query_params.append((key, value))
         
-        url = f"{self.base_url}{api_path}"
+        # Build URL dengan query string
+        query_string = urlencode(query_params)
+        url = f"{self.base_url}{api_path}?{query_string}"
         
         try:
             if method == "GET":
-                response = requests.get(url, params=query_params, timeout=30)
+                response = requests.get(url, timeout=30)
             else:
-                response = requests.post(url, json=params, params=query_params, timeout=30)
+                # Untuk POST, params dikirim sebagai body JSON
+                response = requests.post(url, json=params, timeout=30)
             
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
             st.error(f"API Error: {str(e)}")
+            if hasattr(e.response, 'text'):
+                st.error(f"Response: {e.response.text}")
             return None
     
     def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100):
@@ -187,17 +213,21 @@ class ShopeeAPI:
 
 def get_auth_url(partner_id: str = None, partner_key: str = None, redirect_uri: str = None):
     """Generate URL untuk otorisasi Shopee - menggunakan secrets jika tidak disediakan"""
-    # Ambil dari secrets jika tidak disediakan parameter
+    # Ambil dari secrets
     partner_id = partner_id or st.secrets["SHOPEE_PARTNER_ID"]
-    partner_key = partner_id or st.secrets["SHOPEE_PARTNER_KEY"]
+    partner_key = partner_key or st.secrets["SHOPEE_PARTNER_KEY"]
     redirect_uri = redirect_uri or st.secrets["SHOPEE_REDIRECT_URL"]
     
     timestamp = int(datetime.now().timestamp())
     api_path = "/api/v2/shop/auth_partner"
     
-    # Generate sign untuk auth
-    token_base_str = f"{partner_id}{api_path}{timestamp}"
-    sign = hmac.new(partner_key.encode(), token_base_str.encode(), hashlib.sha256).hexdigest()
+    # Generate sign untuk auth - tanpa access_token dan shop_id
+    base_str = f"{partner_id}{api_path}{timestamp}"
+    sign = hmac.new(
+        partner_key.encode('utf-8'), 
+        base_str.encode('utf-8'), 
+        hashlib.sha256
+    ).hexdigest()
     
     params = {
         "partner_id": partner_id,
@@ -206,19 +236,23 @@ def get_auth_url(partner_id: str = None, partner_key: str = None, redirect_uri: 
         "redirect": redirect_uri
     }
     
-    return f"{SHOPEE_AUTH_URL}?{urlencode(params)}"
+    return f"{SHOPEE_BASE_URL}{api_path}?{urlencode(params)}"
     
 def exchange_code_for_token(code: str, shop_id: int = None, main_account_id: str = None):
-    """Tukar authorization code dengan access token - auto ambil dari secrets"""
+    """Tukar authorization code dengan access token"""
     partner_id = st.secrets["SHOPEE_PARTNER_ID"]
     partner_key = st.secrets["SHOPEE_PARTNER_KEY"]
     
     timestamp = int(datetime.now().timestamp())
     api_path = "/api/v2/auth/token/get"
     
-    # Generate sign
-    token_base_str = f"{partner_id}{api_path}{timestamp}"
-    sign = hmac.new(partner_key.encode(), token_base_str.encode(), hashlib.sha256).hexdigest()
+    # Generate sign - tanpa access_token dan shop_id untuk token exchange
+    base_str = f"{partner_id}{api_path}{timestamp}"
+    sign = hmac.new(
+        partner_key.encode('utf-8'), 
+        base_str.encode('utf-8'), 
+        hashlib.sha256
+    ).hexdigest()
     
     body = {
         "code": code,
@@ -228,43 +262,56 @@ def exchange_code_for_token(code: str, shop_id: int = None, main_account_id: str
     }
     
     if shop_id:
-        body["shop_id"] = shop_id
+        body["shop_id"] = int(shop_id)
     if main_account_id:
-        body["main_account_id"] = main_account_id
+        body["main_account_id"] = str(main_account_id)
     
     try:
-        response = requests.post(f"{SHOPEE_BASE_URL}{api_path}", json=body, timeout=30)
+        url = f"{SHOPEE_BASE_URL}{api_path}"
+        response = requests.post(url, json=body, timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         st.error(f"Token exchange error: {str(e)}")
+        if hasattr(e.response, 'text'):
+            st.error(f"Response: {e.response.text}")
         return None
-
+        
 def refresh_access_token(refresh_token: str, shop_id: int = None):
-    """Refresh access token - auto ambil dari secrets"""
+    """Refresh access token"""
     partner_id = st.secrets["SHOPEE_PARTNER_ID"]
     partner_key = st.secrets["SHOPEE_PARTNER_KEY"]
     
     timestamp = int(datetime.now().timestamp())
     api_path = "/api/v2/auth/access_token/get"
     
-    token_base_str = f"{partner_id}{api_path}{timestamp}"
-    sign = hmac.new(partner_key.encode(), token_base_str.encode(), hashlib.sha256).hexdigest()
+    # Generate sign - tanpa access_token
+    base_str = f"{partner_id}{api_path}{timestamp}"
+    sign = hmac.new(
+        partner_key.encode('utf-8'), 
+        base_str.encode('utf-8'), 
+        hashlib.sha256
+    ).hexdigest()
     
     body = {
         "refresh_token": refresh_token,
         "partner_id": int(partner_id),
         "timestamp": timestamp,
         "sign": sign,
-        "shop_id": shop_id
     }
     
+    if shop_id:
+        body["shop_id"] = int(shop_id)
+    
     try:
-        response = requests.post(f"{SHOPEE_BASE_URL}{api_path}", json=body, timeout=30)
+        url = f"{SHOPEE_BASE_URL}{api_path}"
+        response = requests.post(url, json=body, timeout=30)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         st.error(f"Token refresh error: {str(e)}")
+        if hasattr(e.response, 'text'):
+            st.error(f"Response: {e.response.text}")
         return None
 
 def handle_oauth_callback():
