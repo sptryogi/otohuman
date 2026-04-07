@@ -15,6 +15,7 @@ from urllib.parse import urlencode, parse_qs, urlparse
 import calendar
 from supabase import create_client, Client
 import pandas as pd
+import time
 from io import BytesIO
 
 # ==================== KONFIGURASI ====================
@@ -397,7 +398,30 @@ def to_excel_download(df_dict: dict):
 def render_auth_tab():
     """Render tab autentikasi dengan auto-exchange token"""
     st.header("🔐 Autorasi Shopee")
+
+    # Tampilkan daftar toko yang sudah terhubung
+    db = DatabaseManager(init_supabase())
+    existing_shops = db.get_all_shops()
     
+    if existing_shops:
+        with st.expander("📋 Toko yang Sudah Terhubung", expanded=True):
+            for shop in existing_shops:
+                col1, col2, col3 = st.columns([3, 2, 1])
+                with col1:
+                    st.write(f"**{shop['shop_name']}**")
+                with col2:
+                    st.caption(f"ID: {shop['shop_id']}")
+                with col3:
+                    if st.button("🗑️ Hapus", key=f"del_{shop['shop_id']}"):
+                        try:
+                            db.db.table("shopee_shops").delete().eq("shop_id", shop["shop_id"]).execute()
+                            st.success(f"Toko {shop['shop_name']} dihapus")
+                            time.sleep(1)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Gagal hapus: {e}")
+            st.divider()
+            
     # Cek query params untuk OAuth callback
     query_params = st.query_params
     auth_code = query_params.get("code", "")
@@ -442,6 +466,14 @@ def render_auth_tab():
                             
                             # Clear URL params
                             st.query_params.clear()
+
+                            # Set flag untuk switch ke dashboard
+                            st.session_state["switch_to_dashboard"] = True
+                            st.session_state["active_tab"] = "dashboard"
+                            
+                            # Auto refresh
+                            time.sleep(2)
+                            st.rerun()
                             
                         except Exception as e:
                             st.error(f"Gagal menyimpan ke database: {e}")
@@ -473,9 +505,31 @@ def render_dashboard_tab():
     
     # Sidebar untuk pemilihan toko
     st.sidebar.header("🏪 Pilih Toko")
+    
+    # Tombol untuk authorize toko baru
+    if st.sidebar.button("➕ Tambah Toko Baru", type="primary", use_container_width=True):
+        st.session_state["active_tab"] = "auth"
+        st.rerun()
+    
+    st.sidebar.divider()
+    
     shop_options = {f"{s['shop_name']} (ID: {s['shop_id']})": s for s in shops}
     selected_shop_label = st.sidebar.selectbox("Toko", list(shop_options.keys()))
     selected_shop = shop_options[selected_shop_label]
+    
+    # Tombol re-authorize toko yang dipilih
+    if st.sidebar.button("🔄 Re-Authorize Toko Ini", use_container_width=True):
+        # Hapus token lama dan redirect ke auth
+        try:
+            db.db.table("shopee_shops").delete().eq("shop_id", selected_shop["shop_id"]).execute()
+            st.sidebar.success("Token lama dihapus, mengarahkan ke autorasi...")
+            time.sleep(1)
+            st.session_state["active_tab"] = "auth"
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Gagal hapus token: {e}")
+    
+    st.sidebar.divider()
     
     # Cek dan refresh token jika perlu
     expires_at = datetime.fromisoformat(selected_shop["expires_at"].replace("Z", "+00:00"))
@@ -661,16 +715,57 @@ def main():
         initial_sidebar_state="expanded"
     )
     
+    # Inisialisasi session state untuk tab aktif
+    if "active_tab" not in st.session_state:
+        st.session_state["active_tab"] = "auth"  # Default ke auth jika belum ada toko
+    
+    # Cek apakah sudah ada toko tersimpan
+    db = DatabaseManager(init_supabase())
+    shops = db.get_all_shops()
+    
+    # Jika sudah ada toko dan belum ada tab yang dipilih, default ke dashboard
+    if shops and st.session_state["active_tab"] not in ["auth", "dashboard"]:
+        st.session_state["active_tab"] = "dashboard"
+    elif not shops:
+        st.session_state["active_tab"] = "auth"
+    
     st.title("🛍️ Shopee Escrow & Payout Tracker")
     
-    # Tabs
-    tab_auth, tab_dashboard = st.tabs(["🔐 Autorasi", "📊 Dashboard"])
+    # Navigation tabs dengan session state
+    tab_labels = ["🔐 Autorasi", "📊 Dashboard"]
+    tab_keys = ["auth", "dashboard"]
     
-    with tab_auth:
-        render_auth_tab()
+    # Tentukan index tab aktif
+    try:
+        active_index = tab_keys.index(st.session_state["active_tab"])
+    except ValueError:
+        active_index = 0
     
-    with tab_dashboard:
-        render_dashboard_tab()
+    # Render tabs
+    tabs = st.tabs(tab_labels)
+    
+    with tabs[0]:  # Tab Autorasi
+        if st.session_state["active_tab"] == "auth":
+            render_auth_tab()
+        else:
+            # Tetap render tapi bisa switch
+            render_auth_tab()
+    
+    with tabs[1]:  # Tab Dashboard
+        if st.session_state["active_tab"] == "dashboard":
+            render_dashboard_tab()
+        else:
+            # Jika belum ada toko, tampilkan pesan
+            if not shops:
+                st.info("Silakan authorize toko terlebih dahulu di tab Autorasi")
+            else:
+                render_dashboard_tab()
+    
+    # Auto-switch logic setelah render
+    if st.session_state.get("switch_to_dashboard"):
+        st.session_state["active_tab"] = "dashboard"
+        del st.session_state["switch_to_dashboard"]
+        st.rerun()
 
 if __name__ == "__main__":
     main()
