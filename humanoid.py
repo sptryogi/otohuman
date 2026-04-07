@@ -15,6 +15,7 @@ from urllib.parse import urlencode, parse_qs, urlparse
 import calendar
 from supabase import create_client, Client
 import pandas as pd
+from io import BytesIO
 
 # ==================== KONFIGURASI ====================
 
@@ -69,9 +70,9 @@ def timestamp_to_datetime(timestamp_ms: int) -> datetime:
 # ==================== SHOPEE API HANDLER ====================
 
 class ShopeeAPI:
-    def __init__(self, partner_id: str, partner_key: str, shop_id: int = None, access_token: str = None):
-        self.partner_id = int(partner_id)
-        self.partner_key = partner_key
+    def __init__(self, shop_id: int = None, access_token: str = None):
+        self.partner_id = int(st.secrets["SHOPEE_PARTNER_ID"])
+        self.partner_key = st.secrets["SHOPEE_PARTNER_KEY"]
         self.shop_id = shop_id
         self.access_token = access_token
         self.base_url = SHOPEE_BASE_URL
@@ -184,8 +185,13 @@ class ShopeeAPI:
 
 # ==================== OAUTH HANDLER ====================
 
-def get_auth_url(partner_id: str, partner_key: str, redirect_uri: str):
-    """Generate URL untuk otorisasi Shopee"""
+def get_auth_url(partner_id: str = None, partner_key: str = None, redirect_uri: str = None):
+    """Generate URL untuk otorisasi Shopee - menggunakan secrets jika tidak disediakan"""
+    # Ambil dari secrets jika tidak disediakan parameter
+    partner_id = partner_id or st.secrets["SHOPEE_PARTNER_ID"]
+    partner_key = partner_id or st.secrets["SHOPEE_PARTNER_KEY"]
+    redirect_uri = redirect_uri or st.secrets["SHOPEE_REDIRECT_URI"]
+    
     timestamp = int(datetime.now().timestamp())
     api_path = "/api/v2/shop/auth_partner"
     
@@ -201,9 +207,12 @@ def get_auth_url(partner_id: str, partner_key: str, redirect_uri: str):
     }
     
     return f"{SHOPEE_AUTH_URL}?{urlencode(params)}"
-
-def exchange_code_for_token(partner_id: str, partner_key: str, code: str, shop_id: int = None, main_account_id: str = None):
-    """Tukar authorization code dengan access token"""
+    
+def exchange_code_for_token(code: str, shop_id: int = None, main_account_id: str = None):
+    """Tukar authorization code dengan access token - auto ambil dari secrets"""
+    partner_id = st.secrets["SHOPEE_PARTNER_ID"]
+    partner_key = st.secrets["SHOPEE_PARTNER_KEY"]
+    
     timestamp = int(datetime.now().timestamp())
     api_path = "/api/v2/auth/token/get"
     
@@ -231,8 +240,11 @@ def exchange_code_for_token(partner_id: str, partner_key: str, code: str, shop_i
         st.error(f"Token exchange error: {str(e)}")
         return None
 
-def refresh_access_token(partner_id: str, partner_key: str, refresh_token: str, shop_id: int = None):
-    """Refresh access token yang sudah expire"""
+def refresh_access_token(refresh_token: str, shop_id: int = None):
+    """Refresh access token - auto ambil dari secrets"""
+    partner_id = st.secrets["SHOPEE_PARTNER_ID"]
+    partner_key = st.secrets["SHOPEE_PARTNER_KEY"]
+    
     timestamp = int(datetime.now().timestamp())
     api_path = "/api/v2/auth/access_token/get"
     
@@ -254,6 +266,27 @@ def refresh_access_token(partner_id: str, partner_key: str, refresh_token: str, 
     except requests.exceptions.RequestException as e:
         st.error(f"Token refresh error: {str(e)}")
         return None
+
+def handle_oauth_callback():
+    """Handle OAuth callback dan auto-exchange token"""
+    query_params = st.query_params
+    
+    if "code" in query_params:
+        code = query_params["code"]
+        shop_id = query_params.get("shop_id", None)
+        
+        with st.spinner("Sedang mengambil access token..."):
+            token_data = exchange_code_for_token(code, shop_id)
+            
+            if token_data and "access_token" in token_data:
+                st.session_state["temp_token_data"] = token_data
+                st.session_state["show_shop_name_input"] = True
+                st.query_params.clear()  # Clear URL params
+                return True
+            else:
+                st.error("Gagal mendapatkan token dari Shopee")
+                return False
+    return None
 
 # ==================== DATABASE OPERATIONS ====================
 
@@ -351,75 +384,134 @@ class DatabaseManager:
 # ==================== UI COMPONENTS ====================
 
 def render_auth_page():
-    """Render halaman autentikasi"""
+    """Render halaman autentikasi dengan auto-exchange"""
     st.title("🔐 Autentikasi Shopee")
     
-    with st.form("auth_form"):
-        st.subheader("Konfigurasi Partner")
-        partner_id = st.text_input("Partner ID", value=st.session_state.get("partner_id", ""))
-        partner_key = st.text_input("Partner Key", type="password", value=st.session_state.get("partner_key", ""))
-        redirect_uri = st.text_input("Redirect URI", value="http://localhost:8501/callback")
-        
-        submitted = st.form_submit_button("Generate Auth URL")
-        
-        if submitted and partner_id and partner_key:
-            st.session_state["partner_id"] = partner_id
-            st.session_state["partner_key"] = partner_key
-            
-            auth_url = get_auth_url(partner_id, partner_key, redirect_uri)
-            
-            st.success("URL Autentikasi berhasil dibuat!")
-            st.code(auth_url, language="text")
-            st.markdown(f"[🔗 Klik di sini untuk Autentikasi]({auth_url})")
-            
-            st.info("""
-            **Langkah-langkah:**
-            1. Klik link di atas
-            2. Login ke akun Shopee Seller Anda
-            3. Authorize aplikasi
-            4. Copy code dari URL redirect (parameter `code`)
-            """)
+    # Cek apakah ini callback dari Shopee
+    callback_result = handle_oauth_callback()
     
-    # Form untuk exchange code
-    st.divider()
-    with st.form("exchange_form"):
-        st.subheader("Exchange Code for Token")
-        code = st.text_input("Authorization Code", placeholder="Paste code dari URL redirect")
-        shop_id_input = st.number_input("Shop ID (opsional)", value=0, step=1)
+    # Jika sedang menunggu input nama toko
+    if st.session_state.get("show_shop_name_input", False) and "temp_token_data" in st.session_state:
+        st.success("✅ Berhasil terhubung dengan Shopee!")
+        st.info("Silakan beri nama untuk toko ini agar mudah diidentifikasi")
         
-        if st.form_submit_button("Get Access Token"):
-            if code and partner_id and partner_key:
-                with st.spinner("Mengambil access token..."):
-                    shop_id = shop_id_input if shop_id_input > 0 else None
-                    token_data = exchange_code_for_token(partner_id, partner_key, code, shop_id)
+        with st.form("shop_name_form"):
+            shop_name = st.text_input("Nama Toko", placeholder="Contoh: Toko Utama Jakarta")
+            
+            if st.form_submit_button("Simpan Toko", type="primary"):
+                if shop_name:
+                    token_data = st.session_state["temp_token_data"]
                     
-                    if token_data and "access_token" in token_data:
-                        st.success("Token berhasil diperoleh!")
-                        st.json(token_data)
+                    try:
+                        db = DatabaseManager(init_supabase())
+                        expires_at = datetime.now() + timedelta(seconds=token_data.get("expire_in", 14400))
                         
-                        # Simpan ke session state
-                        st.session_state["access_token"] = token_data["access_token"]
-                        st.session_state["refresh_token"] = token_data.get("refresh_token")
-                        st.session_state["shop_id"] = token_data.get("shop_id")
+                        db.save_shop_token(
+                            shop_id=token_data.get("shop_id"),
+                            shop_name=shop_name,
+                            access_token=token_data["access_token"],
+                            refresh_token=token_data.get("refresh_token"),
+                            expires_at=expires_at,
+                            partner_id=st.secrets["SHOPEE_PARTNER_ID"],
+                            country=token_data.get("country")
+                        )
                         
-                        # Simpan ke database
-                        try:
-                            db = DatabaseManager(init_supabase())
-                            expires_at = datetime.now() + timedelta(seconds=token_data.get("expire_in", 14400))
-                            db.save_shop_token(
-                                shop_id=token_data.get("shop_id"),
-                                shop_name=f"Shop {token_data.get('shop_id')}",
-                                access_token=token_data["access_token"],
-                                refresh_token=token_data.get("refresh_token"),
-                                expires_at=expires_at,
-                                partner_id=partner_id,
-                                country=token_data.get("country")
-                            )
-                            st.success("✅ Token berhasil disimpan ke database!")
-                        except Exception as e:
-                            st.error(f"Gagal menyimpan ke database: {e}")
-                    else:
-                        st.error("Gagal mendapatkan token. Cek response di atas.")
+                        st.success(f"✅ Toko '{shop_name}' berhasil disimpan!")
+                        st.balloons()
+                        
+                        # Clear session state
+                        del st.session_state["temp_token_data"]
+                        del st.session_state["show_shop_name_input"]
+                        
+                        st.info("Silakan kembali ke Dashboard untuk melihat data")
+                        
+                    except Exception as e:
+                        st.error(f"Gagal menyimpan ke database: {e}")
+                else:
+                    st.warning("Nama toko tidak boleh kosong")
+        
+        return
+    
+    # Tampilan normal jika bukan callback
+    st.info("Klik tombol di bawah untuk menghubungkan akun Shopee Anda")
+    
+    if st.button("🔗 Hubungkan Akun Shopee", type="primary", use_container_width=True):
+        auth_url = get_auth_url()
+        st.markdown(f'<meta http-equiv="refresh" content="0;url={auth_url}">', unsafe_allow_html=True)
+        st.markdown(f"[Jika tidak redirect otomatis, klik di sini]({auth_url})")
+    
+    st.divider()
+    st.caption("Partner ID dan Key diambil otomatis dari konfigurasi secrets")
+
+def to_excel_download(df_dict: dict, filename: str = "shopee_data.xlsx"):
+    """Convert multiple dataframes ke Excel untuk download"""
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for sheet_name, df in df_dict.items():
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    output.seek(0)
+    return output
+
+def create_excel_download_button(results: list, shop_name: str):
+    """Buat tombol download Excel dari hasil pengambilan data"""
+    if not results:
+        return
+    
+    # Prepare data untuk Excel
+    summary_data = []
+    escrow_details = []
+    payout_details = []
+    
+    for r in results:
+        date_str = r["date"].strftime("%Y-%m-%d")
+        
+        # Summary sheet
+        summary_data.append({
+            "Tanggal": date_str,
+            "Total Escrow (Rp)": r['escrow']['total_amount'],
+            "Jumlah Order Escrow": r['escrow']['order_count'],
+            "Total Payout (Rp)": r['payout']['total_amount'],
+            "Jumlah Transaksi Payout": r['payout']['transaction_count']
+        })
+        
+        # Escrow details
+        for esc in r['escrow'].get('details', []):
+            escrow_details.append({
+                "Tanggal": date_str,
+                "Order SN": esc.get('order_sn', ''),
+                "Amount (Rp)": esc.get('amount', 0),
+                "Status": esc.get('status', ''),
+                "Release Time": esc.get('release_time', '')
+            })
+        
+        # Payout details
+        for pay in r['payout'].get('details', []):
+            payout_details.append({
+                "Tanggal": date_str,
+                "Payout ID": pay.get('payout_id', ''),
+                "Amount (Rp)": pay.get('amount', 0),
+                "Status": pay.get('status', ''),
+                "Payout Time": pay.get('payout_time', '')
+            })
+    
+    # Buat dictionary of dataframes
+    dfs = {
+        "Summary": pd.DataFrame(summary_data),
+        "Escrow Details": pd.DataFrame(escrow_details) if escrow_details else pd.DataFrame(),
+        "Payout Details": pd.DataFrame(payout_details) if payout_details else pd.DataFrame()
+    }
+    
+    # Generate Excel
+    excel_file = to_excel_download(dfs, f"shopee_data_{shop_name}_{datetime.now().strftime('%Y%m%d')}.xlsx")
+    
+    # Tombol download
+    st.download_button(
+        label="📥 Download Excel",
+        data=excel_file,
+        file_name=f"shopee_escrow_payout_{shop_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
 def render_dashboard():
     """Render dashboard utama"""
@@ -469,8 +561,6 @@ def render_dashboard():
     
     # Inisialisasi API client
     api = ShopeeAPI(
-        partner_id=selected_shop["partner_id"],
-        partner_key=st.session_state.get("partner_key", ""),
         shop_id=selected_shop["shop_id"],
         access_token=selected_shop["access_token"]
     )
@@ -540,6 +630,10 @@ def render_dashboard():
             progress_bar.empty()
             status_text.empty()
             st.success("✅ Semua data berhasil diambil dan disimpan!")
+
+            st.divider()
+            st.subheader("📥 Export Data")
+            create_excel_download_button(results, selected_shop['shop_name'])
             
             # Tampilkan summary
             st.subheader("Ringkasan")
