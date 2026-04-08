@@ -8,6 +8,7 @@ import requests
 import hashlib
 import hmac
 import json
+import hashlib
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 import calendar
@@ -85,7 +86,14 @@ def exchange_code_for_token(code: str, shop_id: int = None):
             timeout=30
         )
         resp.raise_for_status()
-        return resp.json()
+        result = resp.json()
+        
+        if "error" in result:
+            st.error(f"API Error: {result.get('message', 'Unknown error')}")
+            return None
+            
+        return result
+        
     except requests.exceptions.RequestException as e:
         st.error(f"Token exchange error: {str(e)}")
         if hasattr(e.response, 'text'):
@@ -132,8 +140,12 @@ class DatabaseManager:
     
     def save_shop_token(self, shop_id: int, shop_name: str, access_token: str, refresh_token: str, 
                        expires_at: datetime, country: str = None):
+        """Simpan token toko ke database"""
+        if not shop_id:
+            raise ValueError("Shop ID tidak boleh null")
+            
         data = {
-            "shop_id": shop_id,
+            "shop_id": int(shop_id),
             "shop_name": shop_name,
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -143,7 +155,9 @@ class DatabaseManager:
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
         }
-        return self.db.table("shopee_shops").upsert(data).execute()
+        
+        result = self.db.table("shopee_shops").upsert(data, on_conflict="shop_id").execute()
+        return result
     
     def get_shop_token(self, shop_id: int):
         result = self.db.table("shopee_shops").select("*").eq("shop_id", shop_id).execute()
@@ -165,7 +179,7 @@ class DatabaseManager:
             "details": json.dumps(escrow_data.get("details", [])),
             "created_at": datetime.now().isoformat()
         }
-        return self.db.table("escrow_history").upsert(data).execute()
+        return self.db.table("escrow_history").upsert(data, on_conflict="shop_id,date").execute()
     
     def save_payout_data(self, shop_id: int, date: datetime, payout_data: dict):
         data = {
@@ -176,7 +190,7 @@ class DatabaseManager:
             "details": json.dumps(payout_data.get("details", [])),
             "created_at": datetime.now().isoformat()
         }
-        return self.db.table("payout_history").upsert(data).execute()
+        return self.db.table("payout_history").upsert(data, on_conflict="shop_id,date").execute()
     
     def get_escrow_history(self, shop_id: int = None, start_date: datetime = None, end_date: datetime = None):
         query = self.db.table("escrow_history").select("*")
@@ -333,12 +347,10 @@ def handle_oauth_callback():
         code = query_params.get("code")
         shop_id = query_params.get("shop_id")
         
-        # Simpan ke session state untuk form
         st.session_state["oauth_code"] = code
         st.session_state["oauth_shop_id"] = shop_id
         st.session_state["show_name_input"] = True
         
-        # Clear URL params agar bersih
         st.query_params.clear()
         return True
     return False
@@ -347,10 +359,8 @@ def render_auth_tab():
     """Render tab autentikasi"""
     st.header("🔐 Autorisasi Toko Shopee")
     
-    # Handle OAuth callback dulu
     handle_oauth_callback()
     
-    # Jika sedang proses OAuth (dapat code dari redirect)
     if st.session_state.get("show_name_input", False):
         st.success("✅ Berhasil terhubung dengan Shopee! Code otomatis terisi.")
         
@@ -369,17 +379,32 @@ def render_auth_tab():
                 
                 with st.spinner("Mengambil access token..."):
                     code = st.session_state.get("oauth_code")
-                    shop_id = st.session_state.get("oauth_shop_id")
+                    shop_id_from_url = st.session_state.get("oauth_shop_id")
                     
-                    token_data = exchange_code_for_token(code, shop_id)
+                    token_data = exchange_code_for_token(code, shop_id_from_url)
                     
                     if token_data and "access_token" in token_data:
                         try:
+                            shop_id = token_data.get("shop_id")
+                            
+                            # Handle shop_id null
+                            if not shop_id:
+                                st.warning("Shop ID null dari API, menggunakan alternatif...")
+                                shop_id = shop_id_from_url
+                                
+                                if not shop_id:
+                                    # Generate ID dari hash access_token
+                                    token_hash = hashlib.md5(token_data["access_token"].encode()).hexdigest()[:8]
+                                    shop_id = int(f"999{token_hash}", 16) % 100000000
+                                    st.info(f"Generated Shop ID: {shop_id}")
+                            
+                            shop_id = int(shop_id)
+                            
                             db = DatabaseManager(init_supabase())
                             expires_at = datetime.now() + timedelta(seconds=token_data.get("expire_in", 14400))
                             
                             db.save_shop_token(
-                                shop_id=token_data.get("shop_id"),
+                                shop_id=shop_id,
                                 shop_name=shop_name,
                                 access_token=token_data["access_token"],
                                 refresh_token=token_data.get("refresh_token"),
@@ -387,22 +412,23 @@ def render_auth_tab():
                                 country=token_data.get("country")
                             )
                             
-                            # Clear session state
                             st.session_state.pop("oauth_code", None)
                             st.session_state.pop("oauth_shop_id", None)
                             st.session_state.pop("show_name_input", None)
                             
-                            st.success(f"✅ Toko '{shop_name}' berhasil disimpan!")
+                            st.success(f"✅ Toko '{shop_name}' (ID: {shop_id}) berhasil disimpan!")
                             st.balloons()
-                            st.info("Silakan pindah ke tab Dashboard untuk mengambil data.")
                             
                         except Exception as e:
                             st.error(f"Gagal menyimpan: {e}")
+                            import traceback
+                            st.error(traceback.format_exc())
                     else:
                         error_msg = token_data.get("message", "Unknown error") if token_data else "No response"
                         st.error(f"Gagal exchange token: {error_msg}")
+                        if token_data:
+                            st.json(token_data)
         
-        # Tombol cancel
         if st.button("❌ Batal / Coba Lagi"):
             st.session_state.pop("oauth_code", None)
             st.session_state.pop("oauth_shop_id", None)
@@ -411,7 +437,6 @@ def render_auth_tab():
         
         return
     
-    # Tampilan normal: Generate Auth URL
     st.subheader("Step 1: Generate Link Autorisasi")
     
     if st.button("🔗 Generate Authorization URL", type="primary", use_container_width=True):
@@ -424,10 +449,10 @@ def render_auth_tab():
         
         st.info("""
         **Cara penggunaan:**
-        1. Copy link di atas (klik icon copy di pojok kanan code)
-        2. Paste ke browser baru (incognito/private window lebih baik)
+        1. Copy link di atas
+        2. Paste ke browser baru (incognito lebih baik)
         3. Login ke akun Shopee Seller Anda
-        4. Klik "Authorize" / "Izinkan"
+        4. Klik "Authorize"
         5. Anda akan otomatis di-redirect balik ke aplikasi ini
         6. Isi nama toko dan simpan token
         """)
@@ -466,13 +491,11 @@ def render_dashboard_tab():
         st.warning("Belum ada toko. Silakan autorisasi di tab Autorisasi terlebih dahulu.")
         return
     
-    # Sidebar: Pilih toko
     st.sidebar.header("🏪 Pilih Toko")
     shop_options = {f"{s['shop_name']} (ID: {s['shop_id']})": s for s in shops}
     selected_label = st.sidebar.selectbox("Toko", list(shop_options.keys()))
     selected_shop = shop_options[selected_label]
     
-    # Refresh token jika perlu
     expires_at = datetime.fromisoformat(selected_shop["expires_at"].replace('Z', '+00:00'))
     if datetime.now() > expires_at - timedelta(minutes=5):
         st.sidebar.warning("Token hampir expire, merefresh...")
@@ -491,10 +514,8 @@ def render_dashboard_tab():
             )
             st.sidebar.success("Token refreshed!")
     
-    # Init API
     api = ShopeeAPI(selected_shop["shop_id"], selected_shop["access_token"])
     
-    # Tabs
     tab1, tab2 = st.tabs(["📅 Ambil Data", "📈 Laporan"])
     
     with tab1:
@@ -545,7 +566,6 @@ def render_dashboard_tab():
             status_text.empty()
             st.success("Data berhasil diambil!")
             
-            # Summary table
             summary_data = [{
                 "Tanggal": r["date"].strftime("%d %B %Y"),
                 "Escrow (Rp)": r['escrow']['total_amount'],
@@ -557,7 +577,6 @@ def render_dashboard_tab():
             df_summary = pd.DataFrame(summary_data)
             st.dataframe(df_summary, use_container_width=True)
             
-            # Download Excel
             st.divider()
             st.subheader("📥 Export Data")
             
