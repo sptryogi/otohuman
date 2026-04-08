@@ -9,21 +9,17 @@ import requests
 import hashlib
 import hmac
 import json
-import base64
 from datetime import datetime, timedelta
-from urllib.parse import urlencode, parse_qs, urlparse
+from urllib.parse import urlencode
 import calendar
 from supabase import create_client, Client
 import pandas as pd
-import time
 from io import BytesIO
 
 # ==================== KONFIGURASI ====================
 
-# Konstanta API Shopee
 SHOPEE_BASE_URL = "https://partner.shopeemobile.com"
 
-# Inisialisasi Supabase Client
 @st.cache_resource
 def init_supabase():
     supabase_url = st.secrets["SUPABASE_URL"]
@@ -33,12 +29,12 @@ def init_supabase():
 # ==================== SIGNATURE HELPERS ====================
 
 def generate_sign_basic(partner_id: str, partner_key: str, path: str, timestamp: int):
-    """Generate signature untuk endpoint yang tidak butuh access_token (auth, token get)"""
+    """Generate signature untuk endpoint tanpa access_token"""
     base = f"{partner_id}{path}{timestamp}"
     return hmac.new(partner_key.encode(), base.encode(), hashlib.sha256).hexdigest()
 
 def generate_sign_full(partner_id: str, partner_key: str, path: str, timestamp: int, access_token: str, shop_id: int):
-    """Generate signature untuk endpoint yang butuh access_token"""
+    """Generate signature untuk endpoint dengan access_token"""
     base = f"{partner_id}{path}{timestamp}{access_token}{shop_id}"
     return hmac.new(partner_key.encode(), base.encode(), hashlib.sha256).hexdigest()
 
@@ -70,8 +66,11 @@ def exchange_code_for_token(code: str, shop_id: int = None):
     
     timestamp = int(datetime.now().timestamp())
     path = "/api/v2/auth/token/get"
+    
+    # Sign tanpa access_token (basic)
     sign = generate_sign_basic(partner_id, partner_key, path, timestamp)
     
+    # Body request
     body = {
         "code": code,
         "partner_id": int(partner_id),
@@ -83,20 +82,27 @@ def exchange_code_for_token(code: str, shop_id: int = None):
         body["shop_id"] = int(shop_id)
     
     try:
-        resp = requests.post(
-            f"{SHOPEE_BASE_URL}{path}",
-            params={"partner_id": partner_id, "timestamp": timestamp, "sign": sign},
-            json=body,
-            timeout=30
-        )
+        # Shopee token endpoint bisa menerima params di query string ATAU body
+        # Tapi lebih aman kirim sign di query string, sisanya di body
+        url = f"{SHOPEE_BASE_URL}{path}"
+        
+        resp = requests.post(url, json=body, timeout=30)
         resp.raise_for_status()
         return resp.json()
+    except requests.exceptions.HTTPError as e:
+        error_detail = ""
+        try:
+            error_detail = resp.json()
+        except:
+            error_detail = resp.text
+        st.error(f"HTTP Error {e.response.status_code}: {error_detail}")
+        return None
     except requests.exceptions.RequestException as e:
-        st.error(f"Token exchange error: {str(e)}")
+        st.error(f"Network Error: {str(e)}")
         return None
 
 def refresh_access_token(refresh_token: str, shop_id: int = None):
-    """Refresh access token yang sudah expire"""
+    """Refresh access token"""
     partner_id = st.secrets["SHOPEE_PARTNER_ID"]
     partner_key = st.secrets["SHOPEE_PARTNER_KEY"]
     
@@ -115,16 +121,11 @@ def refresh_access_token(refresh_token: str, shop_id: int = None):
         body["shop_id"] = int(shop_id)
     
     try:
-        resp = requests.post(
-            f"{SHOPEE_BASE_URL}{path}",
-            params={"partner_id": partner_id, "timestamp": timestamp, "sign": sign},
-            json=body,
-            timeout=30
-        )
+        resp = requests.post(f"{SHOPEE_BASE_URL}{path}", json=body, timeout=30)
         resp.raise_for_status()
         return resp.json()
-    except requests.exceptions.RequestException as e:
-        st.error(f"Token refresh error: {str(e)}")
+    except Exception as e:
+        st.error(f"Refresh error: {str(e)}")
         return None
 
 # ==================== DATABASE OPERATIONS ====================
@@ -135,7 +136,6 @@ class DatabaseManager:
     
     def save_shop_token(self, shop_id: int, shop_name: str, access_token: str, refresh_token: str, 
                        expires_at: datetime, country: str = None):
-        """Simpan token toko ke database"""
         data = {
             "shop_id": shop_id,
             "shop_name": shop_name,
@@ -147,24 +147,21 @@ class DatabaseManager:
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
         }
-        
-        result = self.db.table("shopee_shops").upsert(data).execute()
-        return result
+        return self.db.table("shopee_shops").upsert(data).execute()
+    
+    def delete_shop(self, shop_id: int):
+        """Hapus toko dari database"""
+        return self.db.table("shopee_shops").delete().eq("shop_id", shop_id).execute()
     
     def get_shop_token(self, shop_id: int):
-        """Ambil token toko dari database"""
         result = self.db.table("shopee_shops").select("*").eq("shop_id", shop_id).execute()
-        if result.data:
-            return result.data[0]
-        return None
+        return result.data[0] if result.data else None
     
     def get_all_shops(self):
-        """Ambil semua toko yang tersimpan"""
         result = self.db.table("shopee_shops").select("*").execute()
         return result.data or []
     
     def save_escrow_data(self, shop_id: int, date: datetime, escrow_data: dict):
-        """Simpan data escrow ke database"""
         data = {
             "shop_id": shop_id,
             "date": date.isoformat(),
@@ -173,12 +170,9 @@ class DatabaseManager:
             "details": json.dumps(escrow_data.get("details", [])),
             "created_at": datetime.now().isoformat()
         }
-        
-        result = self.db.table("escrow_history").upsert(data).execute()
-        return result
+        return self.db.table("escrow_history").upsert(data).execute()
     
     def save_payout_data(self, shop_id: int, date: datetime, payout_data: dict):
-        """Simpan data payout ke database"""
         data = {
             "shop_id": shop_id,
             "date": date.isoformat(),
@@ -187,37 +181,27 @@ class DatabaseManager:
             "details": json.dumps(payout_data.get("details", [])),
             "created_at": datetime.now().isoformat()
         }
-        
-        result = self.db.table("payout_history").upsert(data).execute()
-        return result
+        return self.db.table("payout_history").upsert(data).execute()
     
     def get_escrow_history(self, shop_id: int = None, start_date: datetime = None, end_date: datetime = None):
-        """Ambil histori escrow"""
         query = self.db.table("escrow_history").select("*")
-        
         if shop_id:
             query = query.eq("shop_id", shop_id)
         if start_date:
             query = query.gte("date", start_date.isoformat())
         if end_date:
             query = query.lte("date", end_date.isoformat())
-        
-        result = query.order("date", desc=True).execute()
-        return result.data or []
+        return query.order("date", desc=True).execute().data or []
     
     def get_payout_history(self, shop_id: int = None, start_date: datetime = None, end_date: datetime = None):
-        """Ambil histori payout"""
         query = self.db.table("payout_history").select("*")
-        
         if shop_id:
             query = query.eq("shop_id", shop_id)
         if start_date:
             query = query.gte("date", start_date.isoformat())
         if end_date:
             query = query.lte("date", end_date.isoformat())
-        
-        result = query.order("date", desc=True).execute()
-        return result.data or []
+        return query.order("date", desc=True).execute().data or []
 
 # ==================== SHOPEE API CLIENT ====================
 
@@ -230,10 +214,8 @@ class ShopeeAPI:
         self.base_url = SHOPEE_BASE_URL
     
     def _make_request(self, path: str, params: dict = None, method: str = "GET"):
-        """Base method untuk membuat request ke Shopee API"""
         timestamp = int(datetime.now().timestamp())
         
-        # Generate signature dengan access_token dan shop_id
         sign = generate_sign_full(
             self.partner_id, 
             self.partner_key, 
@@ -243,7 +225,6 @@ class ShopeeAPI:
             self.shop_id
         )
         
-        # Build query parameters
         query_params = {
             "partner_id": self.partner_id,
             "timestamp": timestamp,
@@ -270,7 +251,6 @@ class ShopeeAPI:
             return None
     
     def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100):
-        """Mengambil daftar escrow (dana belum dilepas)"""
         path = "/api/v2/payment/get_escrow_list"
         params = {
             "release_time_from": release_time_from,
@@ -279,14 +259,7 @@ class ShopeeAPI:
         }
         return self._make_request(path, params)
     
-    def get_escrow_detail(self, order_sn: str):
-        """Mengambil detail escrow untuk order tertentu"""
-        path = "/api/v2/payment/get_escrow_detail"
-        params = {"order_sn": order_sn}
-        return self._make_request(path, params)
-    
     def get_payout_detail(self, payout_time_from: int, payout_time_to: int, page_size: int = 100):
-        """Mengambil detail payout (pencairan dana)"""
         path = "/api/v2/payment/get_payout_detail"
         params = {
             "payout_time_from": payout_time_from,
@@ -294,26 +267,10 @@ class ShopeeAPI:
             "page_size": page_size
         }
         return self._make_request(path, params)
-    
-    def get_wallet_transaction_list(self, create_time_from: int, create_time_to: int, page_size: int = 100):
-        """Mengambil daftar transaksi wallet"""
-        path = "/api/v2/payment/get_wallet_transaction_list"
-        params = {
-            "create_time_from": create_time_from,
-            "create_time_to": create_time_to,
-            "page_size": page_size
-        }
-        return self._make_request(path, params)
-    
-    def get_shop_info(self):
-        """Mengambil informasi toko"""
-        path = "/api/v2/shop/get_shop_info"
-        return self._make_request(path)
 
 # ==================== UTILS ====================
 
 def get_last_day_of_previous_months(current_date: datetime, months_back: int = 6):
-    """Mendapatkan tanggal terakhir dari bulan-bulan sebelumnya"""
     dates = []
     for i in range(1, months_back + 1):
         if current_date.month - i <= 0:
@@ -326,11 +283,9 @@ def get_last_day_of_previous_months(current_date: datetime, months_back: int = 6
         last_day = calendar.monthrange(year, month)[1]
         last_date = datetime(year, month, last_day)
         dates.append(last_date)
-    
     return dates
 
 def process_escrow_data(api_response: dict) -> dict:
-    """Proses raw API response escrow menjadi summary"""
     if not api_response or "response" not in api_response:
         return {"total_amount": 0, "order_count": 0, "details": []}
     
@@ -355,7 +310,6 @@ def process_escrow_data(api_response: dict) -> dict:
     }
 
 def process_payout_data(api_response: dict) -> dict:
-    """Proses raw API response payout menjadi summary"""
     if not api_response or "response" not in api_response:
         return {"total_amount": 0, "transaction_count": 0, "details": []}
     
@@ -380,12 +334,10 @@ def process_payout_data(api_response: dict) -> dict:
     }
 
 def to_excel_download(df_dict: dict):
-    """Convert multiple dataframes ke Excel untuk download"""
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         for sheet_name, df in df_dict.items():
             df.to_excel(writer, sheet_name=sheet_name, index=False)
-            # Auto-adjust columns
             worksheet = writer.sheets[sheet_name]
             for column in worksheet.columns:
                 max_length = max(len(str(cell.value) or "") for cell in column) + 2
@@ -396,60 +348,64 @@ def to_excel_download(df_dict: dict):
 # ==================== UI COMPONENTS ====================
 
 def render_auth_tab():
-    """Render tab autentikasi dengan auto-exchange token"""
-    st.header("🔐 Autorasi Shopee")
-
-    # Tampilkan daftar toko yang sudah terhubung
-    db = DatabaseManager(init_supabase())
-    existing_shops = db.get_all_shops()
+    """Render tab autentikasi dengan fitur tambah toko baru"""
+    st.header("🔐 Manajemen Autorisasi Toko")
     
-    if existing_shops:
-        with st.expander("📋 Toko yang Sudah Terhubung", expanded=True):
-            for shop in existing_shops:
-                col1, col2, col3 = st.columns([3, 2, 1])
-                with col1:
-                    st.write(f"**{shop['shop_name']}**")
-                with col2:
-                    st.caption(f"ID: {shop['shop_id']}")
-                with col3:
-                    if st.button("🗑️ Hapus", key=f"del_{shop['shop_id']}"):
-                        try:
-                            db.db.table("shopee_shops").delete().eq("shop_id", shop["shop_id"]).execute()
-                            st.success(f"Toko {shop['shop_name']} dihapus")
-                            time.sleep(1)
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Gagal hapus: {e}")
-            st.divider()
-            
+    db = DatabaseManager(init_supabase())
+    
+    # Tampilkan toko yang sudah terhubung
+    st.subheader("📋 Toko Terhubung")
+    shops = db.get_all_shops()
+    
+    if shops:
+        for shop in shops:
+            col1, col2, col3 = st.columns([3, 2, 1])
+            with col1:
+                st.write(f"**{shop['shop_name']}** (ID: {shop['shop_id']})")
+            with col2:
+                expires = datetime.fromisoformat(shop['expires_at'].replace('Z', '+00:00'))
+                st.caption(f"Expire: {expires.strftime('%d %b %Y %H:%M')}")
+            with col3:
+                if st.button("🗑️ Hapus", key=f"del_{shop['shop_id']}"):
+                    db.delete_shop(shop['shop_id'])
+                    st.success(f"Toko {shop['shop_name']} dihapus")
+                    st.rerun()
+    else:
+        st.info("Belum ada toko yang terhubung")
+    
+    st.divider()
+    
     # Cek query params untuk OAuth callback
     query_params = st.query_params
     auth_code = query_params.get("code", "")
     auth_shop_id = query_params.get("shop_id", "")
     
-    # Jika ada code dari redirect (OAuth callback)
+    # Jika sedang dalam proses autorisasi (ada code di URL)
     if auth_code:
-        st.success("✅ Authorization berhasil! Code otomatis terisi.")
+        st.success("✅ Authorization code diterima dari Shopee!")
+        st.info("Code hanya valid selama 5 menit dan sekali pakai. Segera simpan token.")
         
         with st.form("shop_name_form"):
-            shop_name = st.text_input("Nama Toko", placeholder="Contoh: Toko Utama Jakarta")
+            shop_name = st.text_input("Nama Toko *", placeholder="Contoh: Toko Utama Jakarta")
             
-            col1, col2 = st.columns([1, 3])
+            col1, col2 = st.columns([1, 2])
             with col1:
                 submit = st.form_submit_button("💾 Simpan Token", type="primary")
+            with col2:
+                if st.form_submit_button("❌ Batal"):
+                    st.query_params.clear()
+                    st.rerun()
             
             if submit:
                 if not shop_name:
                     st.error("Nama toko harus diisi!")
                     return
                 
-                with st.spinner("Sedang mengambil access token..."):
-                    # Exchange code for token
+                with st.spinner("Mengambil access token dari Shopee..."):
                     token_data = exchange_code_for_token(auth_code, auth_shop_id)
                     
                     if token_data and "access_token" in token_data:
                         try:
-                            db = DatabaseManager(init_supabase())
                             expires_at = datetime.now() + timedelta(seconds=token_data.get("expire_in", 14400))
                             
                             db.save_shop_token(
@@ -464,33 +420,53 @@ def render_auth_tab():
                             st.success(f"✅ Toko '{shop_name}' berhasil disimpan!")
                             st.balloons()
                             
-                            # Clear URL params
+                            # Clear URL params agar bisa autorisasi lagi
                             st.query_params.clear()
-
-                            # Set flag untuk switch ke dashboard
-                            st.session_state["switch_to_dashboard"] = True
-                            st.session_state["active_tab"] = "dashboard"
                             
-                            # Auto refresh
-                            time.sleep(2)
-                            st.rerun()
-                            
+                            # Tombol kembali atau tambah lagi
+                            if st.button("➕ Tambah Toko Lain"):
+                                st.rerun()
+                                
                         except Exception as e:
                             st.error(f"Gagal menyimpan ke database: {e}")
                     else:
-                        error_msg = token_data.get("message", "Unknown error") if token_data else "No response"
-                        st.error(f"Gagal mendapatkan token: {error_msg}")
+                        st.error("❌ Gagal mendapatkan token. Kemungkinan:")
+                        st.markdown("""
+                        - Code sudah expired (lebih dari 5 menit)
+                        - Code sudah digunakan sebelumnya  
+                        - Signature tidak valid
+                        - Partner ID/Key salah
+                        """)
+                        
+                        if st.button("🔄 Coba Lagi (Clear URL)"):
+                            st.query_params.clear()
+                            st.rerun()
         
         return
     
-    # Tampilan normal jika belum ada code
-    st.info("Klik tombol di bawah untuk menghubungkan akun Shopee Anda")
+    # Tampilan normal - Tombol untuk autorisasi baru
+    st.subheader("➕ Tambah Toko Baru")
     
-    if st.button("🔗 Hubungkan Akun Shopee", type="primary", use_container_width=True):
+    if st.button("🔗 Hubungkan Akun Shopee Baru", type="primary", use_container_width=True):
         auth_url = get_auth_url()
-        # Redirect otomatis
         st.markdown(f'<meta http-equiv="refresh" content="0;url={auth_url}">', unsafe_allow_html=True)
-        st.markdown(f"[Jika tidak redirect otomatis, klik di sini]({auth_url})")
+        st.markdown(f"[Klik di sini jika tidak redirect otomatis]({auth_url})")
+    
+    with st.expander("ℹ️ Bantuan Troubleshooting"):
+        st.markdown("""
+        **Error 403 Forbidden:**
+        - Pastikan Partner ID dan Key sudah benar di secrets.toml
+        - Pastikan aplikasi sudah di-approve oleh Shopee
+        - Code hanya valid 5 menit, jika lewat harulah generate ulang
+        
+        **Error 400 Bad Request:**
+        - Code sudah digunakan (one-time use only)
+        
+        **Cara menambah toko lain:**
+        1. Klik tombol "Hubungkan Akun Shopee Baru" di atas
+        2. Login dengan akun Shopee yang berbeda
+        3. Beri nama yang berbeda saat menyimpan
+        """)
 
 def render_dashboard_tab():
     """Render dashboard utama"""
@@ -500,38 +476,16 @@ def render_dashboard_tab():
     shops = db.get_all_shops()
     
     if not shops:
-        st.warning("Belum ada toko yang terautentikasi. Silakan lakukan autentikasi di tab Autorasi.")
+        st.warning("Belum ada toko. Silakan autorisasi di tab Autorisasi.")
         return
     
-    # Sidebar untuk pemilihan toko
+    # Sidebar pemilihan toko
     st.sidebar.header("🏪 Pilih Toko")
-    
-    # Tombol untuk authorize toko baru
-    if st.sidebar.button("➕ Tambah Toko Baru", type="primary", use_container_width=True):
-        st.session_state["active_tab"] = "auth"
-        st.rerun()
-    
-    st.sidebar.divider()
-    
     shop_options = {f"{s['shop_name']} (ID: {s['shop_id']})": s for s in shops}
     selected_shop_label = st.sidebar.selectbox("Toko", list(shop_options.keys()))
     selected_shop = shop_options[selected_shop_label]
     
-    # Tombol re-authorize toko yang dipilih
-    if st.sidebar.button("🔄 Re-Authorize Toko Ini", use_container_width=True):
-        # Hapus token lama dan redirect ke auth
-        try:
-            db.db.table("shopee_shops").delete().eq("shop_id", selected_shop["shop_id"]).execute()
-            st.sidebar.success("Token lama dihapus, mengarahkan ke autorasi...")
-            time.sleep(1)
-            st.session_state["active_tab"] = "auth"
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Gagal hapus token: {e}")
-    
-    st.sidebar.divider()
-    
-    # Cek dan refresh token jika perlu
+    # Refresh token jika perlu
     expires_at = datetime.fromisoformat(selected_shop["expires_at"].replace("Z", "+00:00"))
     if datetime.now() > expires_at - timedelta(minutes=5):
         st.sidebar.warning("Token hampir expire, merefresh...")
@@ -545,25 +499,22 @@ def render_dashboard_tab():
                 selected_shop["shop_name"],
                 selected_shop["access_token"],
                 selected_shop["refresh_token"],
-                expires_at,
-                selected_shop.get("country")
+                expires_at
             )
             st.sidebar.success("Token refreshed!")
     
-    # Inisialisasi API client
     api = ShopeeAPI(selected_shop["shop_id"], selected_shop["access_token"])
     
-    # Tabs
     tab1, tab2 = st.tabs(["📅 Ambil Data", "📈 Laporan"])
     
     with tab1:
-        st.subheader("Ambil Data Escrow & Payout Per Akhir Bulan")
+        st.subheader("Ambil Data Per Akhir Bulan")
         
         col1, col2 = st.columns(2)
         with col1:
             months_back = st.number_input("Jumlah bulan ke belakang", min_value=1, max_value=12, value=6)
         with col2:
-            current_date = st.date_input("Bulan referensi (default: sekarang)", datetime.now())
+            current_date = st.date_input("Bulan referensi", datetime.now())
         
         if st.button("🚀 Ambil Data", type="primary", use_container_width=True):
             target_dates = get_last_day_of_previous_months(
@@ -578,21 +529,17 @@ def render_dashboard_tab():
             for idx, target_date in enumerate(target_dates):
                 progress = (idx + 1) / len(target_dates)
                 progress_bar.progress(progress)
-                status_text.text(f"Memproses data untuk: {target_date.strftime('%d %B %Y')}")
+                status_text.text(f"Memproses: {target_date.strftime('%d %B %Y')}")
                 
-                # Convert ke timestamp (ms)
-                start_of_day = int(target_date.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
-                end_of_day = int(target_date.replace(hour=23, minute=59, second=59, microsecond=999999).timestamp() * 1000)
+                start_ts = int(target_date.replace(hour=0, minute=0, second=0).timestamp() * 1000)
+                end_ts = int(target_date.replace(hour=23, minute=59, second=59).timestamp() * 1000)
                 
-                # Ambil data
-                escrow_data = api.get_escrow_list(start_of_day, end_of_day)
-                payout_data = api.get_payout_detail(start_of_day, end_of_day)
+                escrow_data = api.get_escrow_list(start_ts, end_ts)
+                payout_data = api.get_payout_detail(start_ts, end_ts)
                 
-                # Proses
                 escrow_summary = process_escrow_data(escrow_data)
                 payout_summary = process_payout_data(payout_data)
                 
-                # Simpan ke DB
                 db.save_escrow_data(selected_shop["shop_id"], target_date, escrow_summary)
                 db.save_payout_data(selected_shop["shop_id"], target_date, payout_summary)
                 
@@ -603,169 +550,103 @@ def render_dashboard_tab():
                 })
                 
                 st.write(f"✅ {target_date.strftime('%d %B %Y')}: "
-                        f"Escrow: Rp {escrow_summary['total_amount']:,.0f}, "
-                        f"Payout: Rp {payout_summary['total_amount']:,.0f}")
+                        f"Escrow Rp {escrow_summary['total_amount']:,.0f}, "
+                        f"Payout Rp {payout_summary['total_amount']:,.0f}")
             
             progress_bar.empty()
             status_text.empty()
-            st.success("✅ Semua data berhasil diambil dan disimpan!")
             
-            # Tampilkan summary table
-            summary_data = []
-            for r in results:
-                summary_data.append({
+            if results:
+                st.success("✅ Data berhasil diambil!")
+                
+                # Summary table
+                summary_data = [{
                     "Tanggal": r["date"].strftime("%d %B %Y"),
-                    "Total Escrow (Rp)": r['escrow']['total_amount'],
-                    "Jumlah Order": r['escrow']['order_count'],
-                    "Total Payout (Rp)": r['payout']['total_amount'],
-                    "Jumlah Transaksi": r['payout']['transaction_count']
-                })
-            
-            df_summary = pd.DataFrame(summary_data)
-            st.dataframe(df_summary, use_container_width=True)
-            
-            # Tombol Download Excel
-            st.divider()
-            st.subheader("📥 Export Data")
-            
-            # Prepare data untuk Excel
-            escrow_details = []
-            payout_details = []
-            
-            for r in results:
-                date_str = r["date"].strftime("%Y-%m-%d")
+                    "Escrow (Rp)": r['escrow']['total_amount'],
+                    "Orders": r['escrow']['order_count'],
+                    "Payout (Rp)": r['payout']['total_amount'],
+                    "Trans": r['payout']['transaction_count']
+                } for r in results]
                 
-                for esc in r['escrow'].get('details', []):
-                    escrow_details.append({
-                        "Tanggal": date_str,
-                        "Order SN": esc.get('order_sn', ''),
-                        "Amount (Rp)": esc.get('amount', 0),
-                        "Status": esc.get('status', ''),
-                        "Release Time": esc.get('release_time', '')
-                    })
+                df_summary = pd.DataFrame(summary_data)
+                st.dataframe(df_summary, use_container_width=True)
                 
-                for pay in r['payout'].get('details', []):
-                    payout_details.append({
-                        "Tanggal": date_str,
-                        "Payout ID": pay.get('payout_id', ''),
-                        "Amount (Rp)": pay.get('amount', 0),
-                        "Status": pay.get('status', ''),
-                        "Payout Time": pay.get('payout_time', '')
-                    })
-            
-            dfs = {
-                "Summary": df_summary,
-                "Escrow Details": pd.DataFrame(escrow_details) if escrow_details else pd.DataFrame(),
-                "Payout Details": pd.DataFrame(payout_details) if payout_details else pd.DataFrame()
-            }
-            
-            excel_file = to_excel_download(dfs)
-            
-            st.download_button(
-                label="📥 Download Excel",
-                data=excel_file,
-                file_name=f"shopee_escrow_payout_{selected_shop['shop_name']}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
+                # Download Excel
+                st.divider()
+                escrow_details = []
+                payout_details = []
+                
+                for r in results:
+                    date_str = r["date"].strftime("%Y-%m-%d")
+                    for esc in r['escrow'].get('details', []):
+                        escrow_details.append({
+                            "Tanggal": date_str,
+                            "Order SN": esc.get('order_sn', ''),
+                            "Amount": esc.get('amount', 0),
+                            "Status": esc.get('status', '')
+                        })
+                    for pay in r['payout'].get('details', []):
+                        payout_details.append({
+                            "Tanggal": date_str,
+                            "Payout ID": pay.get('payout_id', ''),
+                            "Amount": pay.get('amount', 0),
+                            "Status": pay.get('status', '')
+                        })
+                
+                dfs = {
+                    "Summary": df_summary,
+                    "Escrow": pd.DataFrame(escrow_details),
+                    "Payout": pd.DataFrame(payout_details)
+                }
+                
+                excel_file = to_excel_download(dfs)
+                
+                st.download_button(
+                    label="📥 Download Excel",
+                    data=excel_file,
+                    file_name=f"shopee_{selected_shop['shop_name']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
     
     with tab2:
         st.subheader("Laporan Historis")
         
         col1, col2 = st.columns(2)
         with col1:
-            report_start = st.date_input("Dari tanggal", datetime.now() - timedelta(days=180))
+            report_start = st.date_input("Dari", datetime.now() - timedelta(days=180))
         with col2:
-            report_end = st.date_input("Sampai tanggal", datetime.now())
+            report_end = st.date_input("Sampai", datetime.now())
         
-        if st.button("Tampilkan Laporan"):
-            escrow_history = db.get_escrow_history(
+        if st.button("Tampilkan"):
+            escrow_hist = db.get_escrow_history(
                 selected_shop["shop_id"],
                 datetime.combine(report_start, datetime.min.time()),
                 datetime.combine(report_end, datetime.min.time())
             )
             
-            payout_history = db.get_payout_history(
-                selected_shop["shop_id"],
-                datetime.combine(report_start, datetime.min.time()),
-                datetime.combine(report_end, datetime.min.time())
-            )
-            
-            if escrow_history:
-                df_escrow = pd.DataFrame(escrow_history)
-                df_escrow['date'] = pd.to_datetime(df_escrow['date']).dt.strftime('%Y-%m-%d')
-                st.subheader("📦 Data Escrow (Dana Belum Dilepas)")
-                st.dataframe(df_escrow[['date', 'total_escrow_amount', 'order_count']], use_container_width=True)
-                st.line_chart(df_escrow.set_index('date')[['total_escrow_amount']])
-            
-            if payout_history:
-                df_payout = pd.DataFrame(payout_history)
-                df_payout['date'] = pd.to_datetime(df_payout['date']).dt.strftime('%Y-%m-%d')
-                st.subheader("💰 Data Payout (Dana Dicairkan)")
-                st.dataframe(df_payout[['date', 'total_payout_amount', 'transaction_count']], use_container_width=True)
-                st.line_chart(df_payout.set_index('date')[['total_payout_amount']])
-
-# ==================== MAIN APP ====================
+            if escrow_hist:
+                df_esc = pd.DataFrame(escrow_hist)
+                df_esc['date'] = pd.to_datetime(df_esc['date']).dt.strftime('%Y-%m-%d')
+                st.dataframe(df_esc[['date', 'total_escrow_amount', 'order_count']], use_container_width=True)
+                st.line_chart(df_esc.set_index('date')[['total_escrow_amount']])
 
 def main():
     st.set_page_config(
-        page_title="Shopee Escrow & Payout Tracker",
+        page_title="Shopee Escrow Tracker",
         page_icon="🛍️",
-        layout="wide",
-        initial_sidebar_state="expanded"
+        layout="wide"
     )
-    
-    # Inisialisasi session state untuk tab aktif
-    if "active_tab" not in st.session_state:
-        st.session_state["active_tab"] = "auth"  # Default ke auth jika belum ada toko
-    
-    # Cek apakah sudah ada toko tersimpan
-    db = DatabaseManager(init_supabase())
-    shops = db.get_all_shops()
-    
-    # Jika sudah ada toko dan belum ada tab yang dipilih, default ke dashboard
-    if shops and st.session_state["active_tab"] not in ["auth", "dashboard"]:
-        st.session_state["active_tab"] = "dashboard"
-    elif not shops:
-        st.session_state["active_tab"] = "auth"
     
     st.title("🛍️ Shopee Escrow & Payout Tracker")
     
-    # Navigation tabs dengan session state
-    tab_labels = ["🔐 Autorasi", "📊 Dashboard"]
-    tab_keys = ["auth", "dashboard"]
+    tab_auth, tab_dash = st.tabs(["🔐 Autorisasi", "📊 Dashboard"])
     
-    # Tentukan index tab aktif
-    try:
-        active_index = tab_keys.index(st.session_state["active_tab"])
-    except ValueError:
-        active_index = 0
+    with tab_auth:
+        render_auth_tab()
     
-    # Render tabs
-    tabs = st.tabs(tab_labels)
-    
-    with tabs[0]:  # Tab Autorasi
-        if st.session_state["active_tab"] == "auth":
-            render_auth_tab()
-        else:
-            # Tetap render tapi bisa switch
-            render_auth_tab()
-    
-    with tabs[1]:  # Tab Dashboard
-        if st.session_state["active_tab"] == "dashboard":
-            render_dashboard_tab()
-        else:
-            # Jika belum ada toko, tampilkan pesan
-            if not shops:
-                st.info("Silakan authorize toko terlebih dahulu di tab Autorasi")
-            else:
-                render_dashboard_tab()
-    
-    # Auto-switch logic setelah render
-    if st.session_state.get("switch_to_dashboard"):
-        st.session_state["active_tab"] = "dashboard"
-        del st.session_state["switch_to_dashboard"]
-        st.rerun()
+    with tab_dash:
+        render_dashboard_tab()
 
 if __name__ == "__main__":
     main()
