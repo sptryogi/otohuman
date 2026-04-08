@@ -8,13 +8,13 @@ import requests
 import hashlib
 import hmac
 import json
-import hashlib
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 import calendar
 from supabase import create_client, Client
 import pandas as pd
 from io import BytesIO
+import traceback
 
 # ==================== KONFIGURASI ====================
 
@@ -68,6 +68,7 @@ def exchange_code_for_token(code: str, shop_id: int = None):
     path = "/api/v2/auth/token/get"
     sign = generate_sign_basic(partner_id, partner_key, path, timestamp)
     
+    # Build body sesuai dokumentasi Shopee
     body = {
         "code": code,
         "partner_id": int(partner_id),
@@ -75,29 +76,55 @@ def exchange_code_for_token(code: str, shop_id: int = None):
         "sign": sign
     }
     
+    # Shop ID opsional untuk affiliate, wajib untuk seller
     if shop_id:
         body["shop_id"] = int(shop_id)
     
     try:
+        # Gunakan URL params untuk partner_id, timestamp, sign (bukan di body)
+        url = f"{SHOPEE_BASE_URL}{path}"
+        params = {
+            "partner_id": partner_id,
+            "timestamp": timestamp,
+            "sign": sign
+        }
+        
+        # Debug info
+        st.write(f"Debug - URL: {url}")
+        st.write(f"Debug - Params: {params}")
+        st.write(f"Debug - Body: {body}")
+        
         resp = requests.post(
-            f"{SHOPEE_BASE_URL}{path}",
-            params={"partner_id": partner_id, "timestamp": timestamp, "sign": sign},
+            url,
+            params=params,
             json=body,
-            timeout=30
+            timeout=30,
+            headers={"Content-Type": "application/json"}
         )
+        
+        # Debug response
+        st.write(f"Debug - Status Code: {resp.status_code}")
+        st.write(f"Debug - Response Text: {resp.text[:500]}")
+        
         resp.raise_for_status()
         result = resp.json()
         
-        if "error" in result:
-            st.error(f"API Error: {result.get('message', 'Unknown error')}")
+        if result.get("error"):
+            st.error(f"API Error Message: {result.get('message', 'Unknown error')}")
+            st.json(result)
             return None
             
         return result
         
+    except requests.exceptions.HTTPError as e:
+        st.error(f"HTTP Error: {e.response.status_code}")
+        st.error(f"Response: {e.response.text}")
+        return None
     except requests.exceptions.RequestException as e:
-        st.error(f"Token exchange error: {str(e)}")
-        if hasattr(e.response, 'text'):
-            st.error(f"Response detail: {e.response.text}")
+        st.error(f"Request Error: {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"Unexpected Error: {str(e)}")
         return None
 
 def refresh_access_token(refresh_token: str, shop_id: int = None):
@@ -381,7 +408,18 @@ def render_auth_tab():
                     code = st.session_state.get("oauth_code")
                     shop_id_from_url = st.session_state.get("oauth_shop_id")
                     
+                    # Debug info
+                    st.write(f"Debug - Code dari session: {code[:20]}..." if code else "Code: None")
+                    st.write(f"Debug - Shop ID dari URL: {shop_id_from_url}")
+                    
+                    if not code:
+                        st.error("Authorization code tidak ditemukan di session!")
+                        return
+                    
                     token_data = exchange_code_for_token(code, shop_id_from_url)
+                    
+                    # Debug hasil
+                    st.write(f"Debug - Token data received: {token_data is not None}")
                     
                     if token_data and "access_token" in token_data:
                         try:
@@ -424,10 +462,11 @@ def render_auth_tab():
                             import traceback
                             st.error(traceback.format_exc())
                     else:
-                        error_msg = token_data.get("message", "Unknown error") if token_data else "No response"
-                        st.error(f"Gagal exchange token: {error_msg}")
+                        st.error("Gagal mendapatkan access_token dari response")
                         if token_data:
                             st.json(token_data)
+                        else:
+                            st.error("Token data adalah None")
         
         if st.button("❌ Batal / Coba Lagi"):
             st.session_state.pop("oauth_code", None)
