@@ -284,14 +284,46 @@ class ShopeeAPI:
             st.error(f"API Error: {str(e)}")
             return None
     
+    # def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100, page_no: int = 0):
+    #     """Mengambil daftar escrow (dana belum dilepas)"""
+    #     path = "/api/v2/payment/get_escrow_list"
+    #     params = {
+    #         "release_time_from": release_time_from,
+    #         "release_time_to": release_time_to,
+    #         "page_size": page_size,
+    #         "page_no": page_no
+    #     }
+    #     return self._make_request(path, params)
     def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100, page_no: int = 0):
-        """Mengambil daftar escrow (dana belum dilepas)"""
+        """Escrow yang sudah dilepas di rentang waktu tsb"""
         path = "/api/v2/payment/get_escrow_list"
         params = {
             "release_time_from": release_time_from,
             "release_time_to": release_time_to,
             "page_size": page_size,
             "page_no": page_no
+        }
+        return self._make_request(path, params)
+    
+    def get_wallet_transactions(self, create_time_from: int, create_time_to: int, 
+                                 wallet_type: int = 1, page_size: int = 100, page_no: int = 0):
+        """Dana pending / wallet transactions — gunakan ini untuk dana pending"""
+        path = "/api/v2/payment/get_wallet_transaction_list"
+        params = {
+            "create_time_from": create_time_from,
+            "create_time_to": create_time_to,
+            "wallet_type": wallet_type,  # 1 = seller wallet
+            "page_size": page_size,
+            "page_no": page_no
+        }
+        return self._make_request(path, params)
+    
+    def get_income_overview(self, start_time: int, end_time: int):
+        """Summary income termasuk pending & released — ini paling relevan untuk snapshot akhir bulan"""
+        path = "/api/v2/payment/get_income_overview"
+        params = {
+            "start_time": start_time,
+            "end_time": end_time
         }
         return self._make_request(path, params)
     
@@ -634,8 +666,10 @@ def render_dashboard_tab():
                 end_dt = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
                 
                 # Python timestamp() return detik, kali 1000 untuk jadi milidetik
-                start_ts = int(start_dt.timestamp() * 1000)
-                end_ts = int(end_dt.timestamp() * 1000)
+                # start_ts = int(start_dt.timestamp() * 1000)
+                # end_ts = int(end_dt.timestamp() * 1000)
+                start_ts = int(start_dt.timestamp())
+                end_ts = int(end_dt.timestamp())
                 
                 # Debug: tampilkan timestamp
                 st.write(f"Debug - Date: {target_date.strftime('%Y-%m-%d')}")
