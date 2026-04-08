@@ -517,8 +517,23 @@ def render_auth_tab():
             with col1:
                 st.write(f"🏪 **{shop['shop_name']}** (ID: {shop['shop_id']})")
             with col2:
-                expires = datetime.fromisoformat(shop['expires_at'].replace('Z', '+00:00'))
-                status = "🟢 Aktif" if datetime.now() < expires else "🔴 Expired"
+                try:
+                    expires_at_str = shop['expires_at']
+                    if expires_at_str.endswith('Z'):
+                        expires = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+                    else:
+                        expires = datetime.fromisoformat(expires_at_str)
+                    
+                    # Compare dengan timezone-aware datetime
+                    if expires.tzinfo:
+                        now = datetime.now(expires.tzinfo)
+                    else:
+                        now = datetime.now()
+                    
+                    status = "🟢 Aktif" if now < expires else "🔴 Expired"
+                except Exception as e:
+                    status = "⚪ Unknown"
+                
                 st.caption(status)
             with col3:
                 if st.button("🗑️ Hapus", key=f"del_{shop['shop_id']}"):
