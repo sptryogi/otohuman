@@ -325,16 +325,21 @@ class ShopeeAPI:
             st.error(f"API Error: {str(e)}")
             return None
     
-    # def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100, page_no: int = 0):
-    #     """Mengambil daftar escrow (dana belum dilepas)"""
-    #     path = "/api/v2/payment/get_escrow_list"
-    #     params = {
-    #         "release_time_from": release_time_from,
-    #         "release_time_to": release_time_to,
-    #         "page_size": page_size,
-    #         "page_no": page_no
-    #     }
-    #     return self._make_request(path, params)
+    def get_escrow_detail_batch(self, order_sn_list: list):
+        """Ambil detail escrow untuk multiple orders"""
+        path = "/api/v2/payment/get_escrow_detail_batch"
+        
+        # Format sesuai docs: comma-separated string
+        if isinstance(order_sn_list, list):
+            order_sn_str = ",".join(order_sn_list[:50])  # Max 50
+        else:
+            order_sn_str = order_sn_list
+            
+        params = {
+            "order_sn_list": order_sn_str
+        }
+        return self._make_request(path, params, method="POST")
+        
     def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100, page_no: int = 0):
         """Escrow yang sudah dilepas di rentang waktu tsb"""
         path = "/api/v2/payment/get_escrow_list"
@@ -458,13 +463,27 @@ def process_escrow_data(api_response: dict) -> dict:
     orders = []
     
     for item in escrow_list:
-        amount = item.get("escrow_amount", 0)
+        # Coba ambil amount dari berbagai field
+        amount = (
+            item.get("escrow_amount") or 
+            item.get("released_amount") or 
+            item.get("order_income", {}).get("escrow_amount") or
+            0
+        )
+        
+        # Jika amount masih 0, cek field lain
+        if amount == 0:
+            buyer_total = item.get("buyer_total_amount", 0)
+            seller_discount = item.get("seller_discount", 0)
+            amount = buyer_total - seller_discount
+        
         total_amount += amount
+        
         orders.append({
             "order_sn": item.get("order_sn"),
             "amount": amount,
-            "status": item.get("escrow_status"),
-            "release_time": item.get("release_time")
+            "status": item.get("escrow_status") or item.get("status"),
+            "release_time": item.get("release_time") or item.get("escrow_release_time")
         })
     
     return {
@@ -863,63 +882,85 @@ def render_dashboard_tab():
         
         if st.button("💾 Simpan Data Hari Ini", type="primary", use_container_width=True):
             
-            # Rentang waktu: 1 Januari 2026 sampai hari ini (atau save_date)
-            start_date = datetime(2026, 1, 1)  # 1 Januari 2026
+            # Rentang waktu: 1 Jan 2026 sampai hari ini, tapi dibagi per 15 hari
+            start_date = datetime(2026, 1, 1)
             end_date = datetime.combine(save_date, datetime.max.time())
             
-            # Convert ke timestamp (detik)
-            start_ts = int(start_date.timestamp())
-            end_ts = int(end_date.timestamp())
-            
             st.write(f"Rentang: {start_date} sampai {end_date}")
-            st.write(f"Timestamp: {start_ts} sampai {end_ts}")
+            st.write("⚠️ API Shopee membatasi 15 hari per request, akan dibagi menjadi beberapa chunk...")
+            
+            # Bagi rentang waktu menjadi chunk 15 hari
+            def date_range_chunks(start, end, days=15):
+                chunks = []
+                current = start
+                while current < end:
+                    chunk_end = min(current + timedelta(days=days), end)
+                    chunks.append((current, chunk_end))
+                    current = chunk_end
+                return chunks
+            
+            chunks = date_range_chunks(start_date, end_date, days=15)
+            st.write(f"Total {len(chunks)} chunk yang akan diambil")
+            
+            all_orders = []
             
             with st.spinner("Mengambil data dari Shopee API..."):
                 
-                # 1. Ambil SEMUA order dari 1 Jan 2026 sampai sekarang
-                all_orders = []
-                cursor = None
-                page = 1
+                for idx, (chunk_start, chunk_end) in enumerate(chunks):
+                    st.write(f"--- Chunk {idx+1}/{len(chunks)}: {chunk_start.date()} sampai {chunk_end.date()} ---")
+                    
+                    start_ts = int(chunk_start.timestamp())
+                    end_ts = int(chunk_end.timestamp())
+                    
+                    # Ambil order untuk chunk ini
+                    cursor = None
+                    page = 1
+                    
+                    while True:
+                        st.write(f"  Mengambil order page {page}...")
+                        orders_data = api.get_order_list(
+                            time_from=start_ts,
+                            time_to=end_ts,
+                            time_range_field="create_time",
+                            page_size=100,
+                            cursor=cursor
+                        )
+                        
+                        if not orders_data or "response" not in orders_data:
+                            error_msg = orders_data.get('message', 'Unknown error') if orders_data else 'No response'
+                            st.error(f"  Error: {error_msg}")
+                            break
+                        
+                        resp = orders_data["response"]
+                        order_list = resp.get("order_list", [])
+                        all_orders.extend(order_list)
+                        
+                        st.write(f"    -> Dapat {len(order_list)} order (total: {len(all_orders)})")
+                        
+                        cursor = resp.get("next_cursor")
+                        has_more = resp.get("more", False) or (cursor is not None and cursor != "")
+                        
+                        if not has_more:
+                            break
+                        
+                        page += 1
+                        if page > 20:  # Safety limit
+                            st.warning("  Mencapai limit 2000 order per chunk, lanjut ke chunk berikutnya...")
+                            break
                 
-                while True:
-                    st.write(f"Mengambil order page {page}...")
-                    orders_data = api.get_order_list(
-                        time_from=start_ts,
-                        time_to=end_ts,
-                        time_range_field="create_time",
-                        page_size=100,
-                        cursor=cursor
-                    )
-                    
-                    if not orders_data or "response" not in orders_data:
-                        st.error(f"Error atau tidak ada data: {orders_data}")
-                        break
-                    
-                    resp = orders_data["response"]
-                    order_list = resp.get("order_list", [])
-                    all_orders.extend(order_list)
-                    
-                    st.write(f"  -> Dapat {len(order_list)} order (total: {len(all_orders)})")
-                    
-                    # Cek next cursor
-                    cursor = resp.get("next_cursor")
-                    has_more = resp.get("more", False) or cursor is not None
-                    
-                    if not has_more or not cursor:
-                        break
-                    
-                    page += 1
-                    if page > 10:  # Safety limit
-                        st.warning("Mencapai limit 1000 order, berhenti...")
-                        break
+                st.success(f"✅ Total semua order: {len(all_orders)}")
                 
-                st.success(f"Total order ditemukan: {len(all_orders)}")
-                
-                # 2. Proses kategorisasi
-                order_summary = {"pending": 0, "completed": 0, "cancelled": 0, "total": 0, "pending_orders": []}
+                # Proses kategorisasi
+                order_summary = {
+                    "pending": 0, 
+                    "completed": 0, 
+                    "cancelled": 0, 
+                    "total": 0, 
+                    "pending_orders": [],
+                    "pending_count": 0  # FIX: tambah key ini
+                }
                 
                 if all_orders:
-                    # Kategorikan manual
                     pending_status = ["UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "TO_SHIP"]
                     completed_status = ["COMPLETED"]
                     cancelled_status = ["CANCELLED", "IN_CANCEL"]
@@ -943,21 +984,35 @@ def render_dashboard_tab():
                     
                     order_summary["total"] = order_summary["pending"] + order_summary["completed"] + order_summary["cancelled"]
                     order_summary["order_count"] = len(all_orders)
-                    order_summary["pending_count"] = len(order_summary["pending_orders"])
+                    order_summary["pending_count"] = len(order_summary["pending_orders"])  # FIX: hitung pending count
                 
-                st.write(f"Ringkasan: {order_summary}")
+                st.write(f"Ringkasan Order: {order_summary}")
                 
-                # 3. Ambil escrow data untuk dana yang sudah release
-                # Coba dengan rentang yang sama
-                escrow_data = api.get_escrow_list(start_ts, end_ts, page_no=0)
+                # Ambil escrow untuk hari ini saja (bisa 15 hari terakhir)
+                last_15_days = datetime.now() - timedelta(days=15)
+                escrow_start = int(last_15_days.timestamp())
+                escrow_end = int(datetime.now().timestamp())
+                
+                escrow_data = api.get_escrow_list(escrow_start, escrow_end, page_no=0)
+                
+                # FIX: Ambil detail escrow untuk dapatkan amount yang benar
+                if escrow_data and "response" in escrow_data:
+                    escrow_list = escrow_data["response"].get("escrow_list", [])
+                    if escrow_list:
+                        # Ambil sample 10 order untuk detail
+                        sample_orders = [e.get("order_sn") for e in escrow_list[:10] if e.get("order_sn")]
+                        if sample_orders:
+                            st.write(f"Mengambil detail untuk {len(sample_orders)} order escrow...")
+                            detail_data = api.get_escrow_detail_batch(sample_orders)
+                            st.write(f"Detail response: {detail_data}")
+                
                 escrow_summary = process_escrow_data(escrow_data)
                 
-                st.write(f"Escrow: {escrow_summary}")
-                
-                # 4. Ambil payout
-                payout_data = api.get_payout_detail(start_ts, end_ts, page_no=0)
+                # Ambil payout 15 hari terakhir
+                payout_data = api.get_payout_detail(escrow_start, escrow_end, page_no=0)
                 payout_summary = process_payout_data(payout_data)
                 
+                st.write(f"Escrow: {escrow_summary}")
                 st.write(f"Payout: {payout_summary}")
             
             # Simpan ke database
@@ -965,11 +1020,10 @@ def render_dashboard_tab():
                 db = DatabaseManager(init_supabase())
                 save_datetime = datetime.combine(save_date, datetime.min.time())
                 
-                # Simpan sebagai snapshot tanggal hari ini
                 db.save_pending_data(selected_shop["shop_id"], save_datetime, {
                     "total_amount": order_summary["pending"],
                     "order_count": order_summary["pending_count"],
-                    "details": order_summary["pending_orders"][:100]  # Limit 100
+                    "details": order_summary["pending_orders"][:100]
                 })
                 
                 db.save_escrow_data(selected_shop["shop_id"], save_datetime, escrow_summary)
