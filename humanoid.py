@@ -299,7 +299,7 @@ class ShopeeAPI:
         self.access_token = access_token
         self.base_url = SHOPEE_BASE_URL
     
-    def _make_request(self, path: str, params: dict = None, method: str = "GET"):
+    def _make_request(self, path: str, params: dict = None, method: str = "GET", body: dict = None):
         timestamp = int(datetime.now().timestamp())
         sign = generate_sign_full(self.partner_id, self.partner_key, path, timestamp, self.access_token, self.shop_id)
         
@@ -310,15 +310,21 @@ class ShopeeAPI:
             "shop_id": self.shop_id,
             "sign": sign
         }
-        if params:
-            query_params.update(params)
         
         url = f"{self.base_url}{path}"
+        
         try:
             if method == "GET":
+                if params:
+                    query_params.update(params)
                 resp = requests.get(url, params=query_params, timeout=30)
             else:
-                resp = requests.post(url, json=params, params=query_params, timeout=30)
+                # Untuk POST, params di query string, body di JSON
+                if params:
+                    query_params.update(params)
+                # Body dikirim sebagai JSON terpisah
+                resp = requests.post(url, params=query_params, json=(body or params), timeout=30)
+            
             resp.raise_for_status()
             return resp.json()
         except requests.exceptions.RequestException as e:
@@ -329,16 +335,22 @@ class ShopeeAPI:
         """Ambil detail escrow untuk multiple orders"""
         path = "/api/v2/payment/get_escrow_detail_batch"
         
-        # Format sesuai docs: comma-separated string
-        if isinstance(order_sn_list, list):
-            order_sn_str = ",".join(order_sn_list[:50])  # Max 50
-        else:
-            order_sn_str = order_sn_list
-            
-        params = {
-            "order_sn_list": order_sn_str
+        # Format untuk POST body, bukan query params
+        # Coba format JSON array
+        body = {
+            "order_sn_list": order_sn_list[:50]  # Array asli, bukan comma-separated
         }
-        return self._make_request(path, params, method="POST")
+        
+        return self._make_request(path, body, method="POST")
+
+    def get_escrow_detail(self, order_sn: str):
+        """Ambil detail escrow untuk single order"""
+        path = "/api/v2/payment/get_escrow_detail"
+        params = {
+            "order_sn": order_sn
+        }
+        return self._make_request(path, params)
+        
         
     def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100, page_no: int = 0):
         """Escrow yang sudah dilepas di rentang waktu tsb"""
@@ -463,25 +475,43 @@ def process_escrow_data(api_response: dict) -> dict:
     orders = []
     
     for item in escrow_list:
-        # Coba ambil amount dari berbagai field
-        amount = (
-            item.get("escrow_amount") or 
-            item.get("released_amount") or 
-            item.get("order_income", {}).get("escrow_amount") or
-            0
-        )
+        # Cek struktur response
+        st.write(f"Debug escrow item keys: {list(item.keys())}")
         
-        # Jika amount masih 0, cek field lain
+        # Coba berbagai field
+        amount = 0
+        if "escrow" in item:
+            # Nested structure
+            escrow = item["escrow"]
+            amount = (
+                escrow.get("escrow_amount") or 
+                escrow.get("released_amount") or
+                escrow.get("amount") or
+                0
+            )
+        else:
+            # Flat structure
+            amount = (
+                item.get("escrow_amount") or 
+                item.get("released_amount") or
+                item.get("amount") or
+                item.get("total_amount") or
+                0
+            )
+        
+        # Jika masih 0, cek field lain
         if amount == 0:
-            buyer_total = item.get("buyer_total_amount", 0)
-            seller_discount = item.get("seller_discount", 0)
-            amount = buyer_total - seller_discount
+            amount = (
+                item.get("buyer_paid_amount", 0) - 
+                item.get("seller_discount", 0) - 
+                item.get("commission_fee", 0)
+            )
         
-        total_amount += amount
+        total_amount += max(0, amount)  # Pastikan tidak negatif
         
         orders.append({
             "order_sn": item.get("order_sn"),
-            "amount": amount,
+            "amount": max(0, amount),
             "status": item.get("escrow_status") or item.get("status"),
             "release_time": item.get("release_time") or item.get("escrow_release_time")
         })
@@ -491,7 +521,6 @@ def process_escrow_data(api_response: dict) -> dict:
         "order_count": len(orders),
         "details": orders
     }
-
 def process_payout_data(api_response: dict) -> dict:
     if not api_response or "response" not in api_response:
         return {"total_amount": 0, "transaction_count": 0, "details": []}
@@ -950,24 +979,49 @@ def render_dashboard_tab():
                 
                 st.success(f"✅ Total semua order: {len(all_orders)}")
                 
-                # Proses kategorisasi
+                # Proses kategorisasi dengan debug
                 order_summary = {
                     "pending": 0, 
                     "completed": 0, 
                     "cancelled": 0, 
                     "total": 0, 
                     "pending_orders": [],
-                    "pending_count": 0  # FIX: tambah key ini
+                    "pending_count": 0
                 }
                 
                 if all_orders:
-                    pending_status = ["UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "TO_SHIP"]
+                    # Debug: cek field apa saja yang tersedia
+                    st.write("Debug - Sample order fields:", list(all_orders[0].keys()) if all_orders else [])
+                    st.write("Debug - Sample order:", all_orders[0] if all_orders else {})
+                    
+                    pending_status = ["UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "TO_SHIP", "INVOICE_PENDING"]
                     completed_status = ["COMPLETED"]
-                    cancelled_status = ["CANCELLED", "IN_CANCEL"]
+                    cancelled_status = ["CANCELLED", "IN_CANCEL", "TO_RETURN"]
                     
                     for order in all_orders:
                         status = order.get("order_status", "")
-                        amount = order.get("total_amount", 0)
+                        
+                        # Coba berbagai field untuk amount
+                        amount = (
+                            order.get("total_amount") or 
+                            order.get("buyer_paid_amount") or 
+                            order.get("escrow_amount") or
+                            order.get("order_subtotal") or
+                            order.get("grand_total") or
+                            order.get("total_estimated_amount") or
+                            0
+                        )
+                        
+                        # Jika masih 0, coba dari item list
+                        if amount == 0 and "item_list" in order:
+                            for item in order.get("item_list", []):
+                                item_price = item.get("item_price", 0)
+                                item_qty = item.get("item_quantity", 1)
+                                amount += item_price * item_qty
+                        
+                        # Debug untuk 5 order pertama
+                        if len(order_summary["pending_orders"]) < 5:
+                            st.write(f"Order {order.get('order_sn')}: status={status}, amount={amount}, raw_total={order.get('total_amount')}")
                         
                         if status in pending_status:
                             order_summary["pending"] += amount
@@ -984,7 +1038,7 @@ def render_dashboard_tab():
                     
                     order_summary["total"] = order_summary["pending"] + order_summary["completed"] + order_summary["cancelled"]
                     order_summary["order_count"] = len(all_orders)
-                    order_summary["pending_count"] = len(order_summary["pending_orders"])  # FIX: hitung pending count
+                    order_summary["pending_count"] = len(order_summary["pending_orders"])
                 
                 st.write(f"Ringkasan Order: {order_summary}")
                 
@@ -995,16 +1049,23 @@ def render_dashboard_tab():
                 
                 escrow_data = api.get_escrow_list(escrow_start, escrow_end, page_no=0)
                 
-                # FIX: Ambil detail escrow untuk dapatkan amount yang benar
+                # FIX: Ambil detail per order untuk dapatkan amount
                 if escrow_data and "response" in escrow_data:
                     escrow_list = escrow_data["response"].get("escrow_list", [])
+                    st.write(f"Escrow list count: {len(escrow_list)}")
+                    
                     if escrow_list:
-                        # Ambil sample 10 order untuk detail
-                        sample_orders = [e.get("order_sn") for e in escrow_list[:10] if e.get("order_sn")]
-                        if sample_orders:
-                            st.write(f"Mengambil detail untuk {len(sample_orders)} order escrow...")
-                            detail_data = api.get_escrow_detail_batch(sample_orders)
-                            st.write(f"Detail response: {detail_data}")
+                        # Ambil detail untuk 5 order pertama untuk test
+                        test_orders = [e.get("order_sn") for e in escrow_list[:5] if e.get("order_sn")]
+                        
+                        for order_sn in test_orders:
+                            st.write(f"Mengambil detail untuk {order_sn}...")
+                            detail = api.get_escrow_detail(order_sn)  # Method baru
+                            st.write(f"Detail: {detail}")
+                            if detail and "response" in detail:
+                                escrow_info = detail["response"].get("escrow", {})
+                                st.write(f"Escrow amount: {escrow_info.get('escrow_amount')}")
+                                st.write(f"Released amount: {escrow_info.get('released_amount')}")
                 
                 escrow_summary = process_escrow_data(escrow_data)
                 
