@@ -8,7 +8,7 @@ import requests
 import hashlib
 import hmac
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 import calendar
 from supabase import create_client, Client
@@ -170,17 +170,26 @@ class DatabaseManager:
         """Simpan token toko ke database"""
         if not shop_id:
             raise ValueError("Shop ID tidak boleh null")
+        
+        # Pastikan expires_at dalam format ISO string yang benar
+        if isinstance(expires_at, datetime):
+            if expires_at.tzinfo is None:
+                # Tambahkan UTC jika tidak ada timezone
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            expires_at_str = expires_at.isoformat()
+        else:
+            expires_at_str = str(expires_at)
             
         data = {
             "shop_id": int(shop_id),
             "shop_name": shop_name,
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "expires_at": expires_at.isoformat(),
+            "expires_at": expires_at_str,
             "partner_id": st.secrets["SHOPEE_PARTNER_ID"],
             "country": country,
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat()
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
         result = self.db.table("shopee_shops").upsert(data, on_conflict="shop_id").execute()
@@ -535,8 +544,25 @@ def render_dashboard_tab():
     selected_label = st.sidebar.selectbox("Toko", list(shop_options.keys()))
     selected_shop = shop_options[selected_label]
     
-    expires_at = datetime.fromisoformat(selected_shop["expires_at"].replace('Z', '+00:00'))
-    if datetime.now() > expires_at - timedelta(minutes=5):
+    expires_at_str = selected_shop["expires_at"]
+    try:
+        # Coba parse dengan timezone
+        if 'Z' in expires_at_str:
+            expires_at = datetime.fromisoformat(expires_at_str.replace('Z', '+00:00'))
+        elif '+' in expires_at_str:
+            expires_at = datetime.fromisoformat(expires_at_str)
+        else:
+            # Tanpa timezone, anggap UTC
+            expires_at = datetime.fromisoformat(expires_at_str)
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except Exception as e:
+        st.sidebar.error(f"Error parsing expires_at: {e}")
+        expires_at = datetime.now() + timedelta(hours=4)  # Default 4 jam
+    
+    # Compare dengan timezone-aware datetime
+    now = datetime.now(expires_at.tzinfo) if expires_at.tzinfo else datetime.now()
+    
+    if now > expires_at - timedelta(minutes=5):
         st.sidebar.warning("Token hampir expire, merefresh...")
         new_token = refresh_access_token(selected_shop["refresh_token"], selected_shop["shop_id"])
         if new_token:
