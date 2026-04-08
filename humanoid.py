@@ -284,19 +284,27 @@ class ShopeeAPI:
             st.error(f"API Error: {str(e)}")
             return None
     
-    def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100):
-        return self._make_request("/api/v2/payment/get_escrow_list", {
+    def get_escrow_list(self, release_time_from: int, release_time_to: int, page_size: int = 100, page_no: int = 0):
+        """Mengambil daftar escrow (dana belum dilepas)"""
+        path = "/api/v2/payment/get_escrow_list"
+        params = {
             "release_time_from": release_time_from,
             "release_time_to": release_time_to,
-            "page_size": page_size
-        })
+            "page_size": page_size,
+            "page_no": page_no
+        }
+        return self._make_request(path, params)
     
-    def get_payout_detail(self, payout_time_from: int, payout_time_to: int, page_size: int = 100):
-        return self._make_request("/api/v2/payment/get_payout_detail", {
+    def get_payout_detail(self, payout_time_from: int, payout_time_to: int, page_size: int = 100, page_no: int = 0):
+        """Mengambil detail payout (pencairan dana)"""
+        path = "/api/v2/payment/get_payout_detail"
+        params = {
             "payout_time_from": payout_time_from,
             "payout_time_to": payout_time_to,
-            "page_size": page_size
-        })
+            "page_size": page_size,
+            "page_no": page_no
+        }
+        return self._make_request(path, params)
 
 # ==================== UTILS ====================
 
@@ -622,11 +630,23 @@ def render_dashboard_tab():
                 progress_bar.progress(progress)
                 status_text.text(f"Memproses: {target_date.strftime('%d %B %Y')}")
                 
-                start_ts = int(target_date.replace(hour=0, minute=0, second=0).timestamp() * 1000)
-                end_ts = int(target_date.replace(hour=23, minute=59, second=59).timestamp() * 1000)
+                start_dt = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+                end_dt = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
                 
-                escrow_data = api.get_escrow_list(start_ts, end_ts)
-                payout_data = api.get_payout_detail(start_ts, end_ts)
+                # Python timestamp() return detik, kali 1000 untuk jadi milidetik
+                start_ts = int(start_dt.timestamp() * 1000)
+                end_ts = int(end_dt.timestamp() * 1000)
+                
+                # Debug: tampilkan timestamp
+                st.write(f"Debug - Date: {target_date.strftime('%Y-%m-%d')}")
+                st.write(f"Debug - Start TS: {start_ts} ({datetime.fromtimestamp(start_ts/1000)})")
+                st.write(f"Debug - End TS: {end_ts} ({datetime.fromtimestamp(end_ts/1000)})")
+                
+                # escrow_data = api.get_escrow_list(start_ts, end_ts)
+                # payout_data = api.get_payout_detail(start_ts, end_ts)
+
+                escrow_data = api.get_escrow_list(start_ts, end_ts, page_no=0)
+                payout_data = api.get_payout_detail(start_ts, end_ts, page_no=0)
                 
                 escrow_summary = process_escrow_data(escrow_data)
                 payout_summary = process_payout_data(payout_data)
