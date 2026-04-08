@@ -227,6 +227,18 @@ class DatabaseManager:
             "created_at": datetime.now().isoformat()
         }
         return self.db.table("payout_history").upsert(data, on_conflict="shop_id,date").execute()
+
+    def save_income_data(self, shop_id: int, date: datetime, income_data: dict):
+        data = {
+            "shop_id": shop_id,
+            "date": date.isoformat(),
+            "total_released": income_data.get("total_released", 0),
+            "total_pending_withdrawal": income_data.get("total_pending_withdrawal", 0),
+            "transaction_count": income_data.get("transaction_count", 0),
+            "details": json.dumps(income_data.get("details", [])),
+            "created_at": datetime.now().isoformat()
+        }
+        return self.db.table("income_history").upsert(data, on_conflict="shop_id,date").execute()
     
     def get_escrow_history(self, shop_id: int = None, start_date: datetime = None, end_date: datetime = None):
         query = self.db.table("escrow_history").select("*")
@@ -338,6 +350,51 @@ class ShopeeAPI:
         }
         return self._make_request(path, params)
 
+    def get_income_detail(self, date_from: int, date_to: int, limit: int = 100, cursor: str = None):
+        """
+        Mengambil detail income termasuk dana yang sudah dilepas (released) 
+        tapi belum ditarik oleh seller
+        """
+        path = "/api/v2/payment/get_income_detail"
+        params = {
+            "date_from": date_from,
+            "date_to": date_to,
+            "limit": limit
+        }
+        if cursor:
+            params["cursor"] = cursor
+        return self._make_request(path, params)
+    
+    def get_order_detail(self, order_sn_list: list):
+        """
+        Mengambil detail order untuk cek status pending
+        order_sn_list: list of order serial numbers
+        """
+        path = "/api/v2/order/get_order_detail"
+        params = {
+            "order_sn_list": ",".join(order_sn_list),
+            "request_order_status_pending": "true"
+        }
+        return self._make_request(path, params)
+    
+    def get_order_list(self, time_from: int, time_to: int, time_range_field: str = "create_time", 
+                       order_status: str = "ALL", page_size: int = 100, cursor: str = None):
+        """
+        Mengambil daftar order untuk filter pending orders
+        time_range_field: create_time, update_time
+        """
+        path = "/api/v2/order/get_order_list"
+        params = {
+            "time_from": time_from,
+            "time_to": time_to,
+            "time_range_field": time_range_field,
+            "order_status": order_status,
+            "page_size": page_size
+        }
+        if cursor:
+            params["cursor"] = cursor
+        return self._make_request(path, params)
+
 # ==================== UTILS ====================
 
 def get_last_day_of_previous_months(current_date: datetime, months_back: int = 6):
@@ -401,6 +458,69 @@ def process_payout_data(api_response: dict) -> dict:
         "details": transactions
     }
 
+def process_income_data(api_response: dict) -> dict:
+    """Proses data income dari get_income_detail"""
+    if not api_response or "response" not in api_response:
+        return {"total_released": 0, "total_pending_withdrawal": 0, "transaction_count": 0, "details": []}
+    
+    income_list = api_response["response"].get("income_list", [])
+    total_released = 0
+    total_pending = 0
+    transactions = []
+    
+    for item in income_list:
+        released_amount = item.get("released_amount", 0)
+        # Jika actual_payout_time null, berarti belum ditarik
+        is_pending_withdrawal = item.get("actual_payout_time") is None
+        
+        if is_pending_withdrawal:
+            total_pending += released_amount
+        
+        total_released += released_amount
+        
+        transactions.append({
+            "order_sn": item.get("order_sn"),
+            "released_amount": released_amount,
+            "actual_payout_time": item.get("actual_payout_time"),
+            "is_pending_withdrawal": is_pending_withdrawal,
+            "escrow_release_time": item.get("escrow_release_time")
+        })
+    
+    return {
+        "total_released": total_released,
+        "total_pending_withdrawal": total_pending,
+        "transaction_count": len(transactions),
+        "details": transactions
+    }
+
+def process_pending_orders(api_response: dict) -> dict:
+    """Proses data order pending (dana belum dilepas)"""
+    if not api_response or "response" not in api_response:
+        return {"total_pending_amount": 0, "order_count": 0, "details": []}
+    
+    order_list = api_response["response"].get("order_list", [])
+    total_pending = 0
+    orders = []
+    
+    for order in order_list:
+        # Hitung total amount dari items
+        total_amount = order.get("total_amount", 0)
+        total_pending += total_amount
+        
+        orders.append({
+            "order_sn": order.get("order_sn"),
+            "total_amount": total_amount,
+            "order_status": order.get("order_status"),
+            "create_time": order.get("create_time"),
+            "escrow_amount": order.get("escrow_amount", 0)
+        })
+    
+    return {
+        "total_pending_amount": total_pending,
+        "order_count": len(orders),
+        "details": orders
+    }
+    
 def to_excel_download(df_dict: dict):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -662,37 +782,71 @@ def render_dashboard_tab():
                 progress_bar.progress(progress)
                 status_text.text(f"Memproses: {target_date.strftime('%d %B %Y')}")
                 
+                date_str = target_date.strftime("%Y-%m-%d")
+                date_from = int(target_date.strftime("%Y%m%d"))
+                date_to = date_from
+                
+                # Untuk timestamp-based API (order list)
                 start_dt = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
                 end_dt = target_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-                
-                # Python timestamp() return detik, kali 1000 untuk jadi milidetik
-                # start_ts = int(start_dt.timestamp() * 1000)
-                # end_ts = int(end_dt.timestamp() * 1000)
                 start_ts = int(start_dt.timestamp())
                 end_ts = int(end_dt.timestamp())
                 
-                # Debug: tampilkan timestamp
-                st.write(f"Debug - Date: {target_date.strftime('%Y-%m-%d')}")
-                st.write(f"Debug - Start TS: {start_ts} ({datetime.fromtimestamp(start_ts/1000)})")
-                st.write(f"Debug - End TS: {end_ts} ({datetime.fromtimestamp(end_ts/1000)})")
+                st.write(f"📅 Memproses: {date_str}")
                 
-                # escrow_data = api.get_escrow_list(start_ts, end_ts)
-                # payout_data = api.get_payout_detail(start_ts, end_ts)
-
+                # 1. Dana yang sudah dilepas tapi belum ditarik (Income Detail)
+                income_data = api.get_income_detail(date_from=date_from, date_to=date_to)
+                income_summary = process_income_data(income_data)
+                
+                # 2. Dana pending (order list dengan status pending)
+                # Cek order dengan status COMPLETED, TO_CONFIRM_RECEIVE, etc yang belum release escrow
+                pending_orders = api.get_order_list(
+                    time_from=start_ts, 
+                    time_to=end_ts,
+                    time_range_field="create_time",
+                    order_status="READY_TO_SHIP"  # atau "PROCESSED" tergantung kebutuhan
+                )
+                pending_summary = process_pending_orders(pending_orders)
+                
+                # 3. Escrow yang sudah release (untuk komparasi)
                 escrow_data = api.get_escrow_list(start_ts, end_ts, page_no=0)
-                payout_data = api.get_payout_detail(start_ts, end_ts, page_no=0)
-                
                 escrow_summary = process_escrow_data(escrow_data)
+                
+                # 4. Payout yang sudah dilakukan
+                payout_data = api.get_payout_detail(start_ts, end_ts, page_no=0)
                 payout_summary = process_payout_data(payout_data)
                 
                 db.save_escrow_data(selected_shop["shop_id"], target_date, escrow_summary)
                 db.save_payout_data(selected_shop["shop_id"], target_date, payout_summary)
+                db.save_income_data(selected_shop["shop_id"], target_date, income_summary)
                 
                 results.append({
                     "date": target_date,
+                    "income": income_summary,
+                    "pending": pending_summary,
                     "escrow": escrow_summary,
                     "payout": payout_summary
                 })
+
+                # Display hasil
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric(
+                        "Dana Released (Belum Tarik)", 
+                        f"Rp {income_summary['total_pending_withdrawal']:,.0f}",
+                        f"{income_summary['transaction_count']} transaksi"
+                    )
+                with col2:
+                    st.metric(
+                        "Dana Pending (Order Belum Selesai)", 
+                        f"Rp {pending_summary['total_pending_amount']:,.0f}",
+                        f"{pending_summary['order_count']} orders"
+                    )
+                with col3:
+                    st.metric(
+                        "Dana Sudah Ditarik", 
+                        f"Rp {payout_summary['total_amount']:,.0f}"
+                    )
                 
                 st.write(f"✅ {target_date.strftime('%d %B %Y')}: Escrow Rp {escrow_summary['total_amount']:,.0f}, Payout Rp {payout_summary['total_amount']:,.0f}")
             
