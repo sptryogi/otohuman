@@ -407,21 +407,31 @@ class ShopeeAPI:
         return self._make_request(path, params)
     
     def get_order_list(self, time_from: int, time_to: int, time_range_field: str = "create_time", 
-                       order_status: str = "ALL", page_size: int = 100, cursor: str = None):
+                       page_size: int = 100, cursor: str = None):
         """
-        Mengambil daftar order untuk filter pending orders
-        time_range_field: create_time, update_time
+        Mengambil SEMUA order dalam rentang waktu, tanpa filter status
         """
         path = "/api/v2/order/get_order_list"
         params = {
             "time_from": time_from,
             "time_to": time_to,
             "time_range_field": time_range_field,
-            "order_status": order_status,
             "page_size": page_size
         }
+            
         if cursor:
             params["cursor"] = cursor
+            
+        return self._make_request(path, params)
+    
+    def get_order_detail(self, order_sn_list: list):
+        """Ambil detail order untuk cek status"""
+        path = "/api/v2/order/get_order_detail"
+        # Shopee API terima comma-separated
+        order_sn_str = ",".join(order_sn_list[:50])  # Max 50 per request
+        params = {
+            "order_sn_list": order_sn_str
+        }
         return self._make_request(path, params)
 
 # ==================== UTILS ====================
@@ -548,6 +558,54 @@ def process_pending_orders(api_response: dict) -> dict:
         "total_pending_amount": total_pending,
         "order_count": len(orders),
         "details": orders
+    }
+
+def process_orders_detailed(api_response: dict) -> dict:
+    """
+    Proses semua order, lalu kategorikan:
+    - Pending: UNPAID, READY_TO_SHIP, PROCESSED, SHIPPED, TO_CONFIRM_RECEIVE
+    - Completed: COMPLETED
+    - Cancelled: CANCELLED
+    """
+    if not api_response or "response" not in api_response:
+        return {"pending": 0, "completed": 0, "cancelled": 0, "total": 0, "orders": []}
+    
+    order_list = api_response["response"].get("order_list", [])
+    
+    pending_status = ["UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "TO_SHIP"]
+    completed_status = ["COMPLETED"]
+    cancelled_status = ["CANCELLED", "IN_CANCEL"]
+    
+    pending_amount = 0
+    completed_amount = 0
+    cancelled_amount = 0
+    pending_orders = []
+    
+    for order in order_list:
+        status = order.get("order_status", "")
+        amount = order.get("total_amount", 0)
+        
+        if status in pending_status:
+            pending_amount += amount
+            pending_orders.append({
+                "order_sn": order.get("order_sn"),
+                "amount": amount,
+                "status": status,
+                "create_time": order.get("create_time")
+            })
+        elif status in completed_status:
+            completed_amount += amount
+        elif status in cancelled_status:
+            cancelled_amount += amount
+    
+    return {
+        "pending": pending_amount,
+        "completed": completed_amount,
+        "cancelled": cancelled_amount,
+        "total": pending_amount + completed_amount + cancelled_amount,
+        "order_count": len(order_list),
+        "pending_orders": pending_orders,
+        "pending_count": len(pending_orders)
     }
     
 def to_excel_download(df_dict: dict):
@@ -804,121 +862,178 @@ def render_dashboard_tab():
             st.write("")  # Spacer
         
         if st.button("💾 Simpan Data Hari Ini", type="primary", use_container_width=True):
-            # Format tanggal untuk API
-            today = save_date
-            date_from = int(today.strftime("%Y%m%d"))
-            date_to = date_from
             
-            # Timestamp untuk order list (3 bulan ke belakang untuk pending)
-            three_months_ago = today - timedelta(days=90)
-            start_ts = int(datetime.combine(three_months_ago, datetime.min.time()).timestamp())
-            end_ts = int(datetime.combine(today, datetime.max.time()).timestamp())
+            # Rentang waktu: 1 Januari 2026 sampai hari ini (atau save_date)
+            start_date = datetime(2026, 1, 1)  # 1 Januari 2026
+            end_date = datetime.combine(save_date, datetime.max.time())
+            
+            # Convert ke timestamp (detik)
+            start_ts = int(start_date.timestamp())
+            end_ts = int(end_date.timestamp())
+            
+            st.write(f"Rentang: {start_date} sampai {end_date}")
+            st.write(f"Timestamp: {start_ts} sampai {end_ts}")
             
             with st.spinner("Mengambil data dari Shopee API..."):
-                # 1. Dana Released (Belum Tarik) - dari income detail
-                income_data = api.get_income_detail(date_from=date_from, date_to=date_to, limit=100)
-                income_summary = process_income_data(income_data)
                 
-                # 2. Dana Pending - dari order list (pending orders)
-                pending_orders = api.get_order_list(
-                    time_from=start_ts, 
-                    time_to=end_ts,
-                    time_range_field="create_time",
-                    order_status="READY_TO_SHIP"  # Orders yang sudah dibayar tapi belum selesai
-                )
-                pending_summary = process_pending_orders(pending_orders)
+                # 1. Ambil SEMUA order dari 1 Jan 2026 sampai sekarang
+                all_orders = []
+                cursor = None
+                page = 1
                 
-                # 3. Escrow & Payout untuk referensi
-                start_day = datetime.combine(today, datetime.min.time())
-                end_day = datetime.combine(today, datetime.max.time())
-                start_day_ts = int(start_day.timestamp())
-                end_day_ts = int(end_day.timestamp())
+                while True:
+                    st.write(f"Mengambil order page {page}...")
+                    orders_data = api.get_order_list(
+                        time_from=start_ts,
+                        time_to=end_ts,
+                        time_range_field="create_time",
+                        page_size=100,
+                        cursor=cursor
+                    )
+                    
+                    if not orders_data or "response" not in orders_data:
+                        st.error(f"Error atau tidak ada data: {orders_data}")
+                        break
+                    
+                    resp = orders_data["response"]
+                    order_list = resp.get("order_list", [])
+                    all_orders.extend(order_list)
+                    
+                    st.write(f"  -> Dapat {len(order_list)} order (total: {len(all_orders)})")
+                    
+                    # Cek next cursor
+                    cursor = resp.get("next_cursor")
+                    has_more = resp.get("more", False) or cursor is not None
+                    
+                    if not has_more or not cursor:
+                        break
+                    
+                    page += 1
+                    if page > 10:  # Safety limit
+                        st.warning("Mencapai limit 1000 order, berhenti...")
+                        break
                 
-                escrow_data = api.get_escrow_list(start_day_ts, end_day_ts, page_no=0)
+                st.success(f"Total order ditemukan: {len(all_orders)}")
+                
+                # 2. Proses kategorisasi
+                order_summary = {"pending": 0, "completed": 0, "cancelled": 0, "total": 0, "pending_orders": []}
+                
+                if all_orders:
+                    # Kategorikan manual
+                    pending_status = ["UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "TO_SHIP"]
+                    completed_status = ["COMPLETED"]
+                    cancelled_status = ["CANCELLED", "IN_CANCEL"]
+                    
+                    for order in all_orders:
+                        status = order.get("order_status", "")
+                        amount = order.get("total_amount", 0)
+                        
+                        if status in pending_status:
+                            order_summary["pending"] += amount
+                            order_summary["pending_orders"].append({
+                                "order_sn": order.get("order_sn"),
+                                "amount": amount,
+                                "status": status,
+                                "create_time": order.get("create_time")
+                            })
+                        elif status in completed_status:
+                            order_summary["completed"] += amount
+                        elif status in cancelled_status:
+                            order_summary["cancelled"] += amount
+                    
+                    order_summary["total"] = order_summary["pending"] + order_summary["completed"] + order_summary["cancelled"]
+                    order_summary["order_count"] = len(all_orders)
+                    order_summary["pending_count"] = len(order_summary["pending_orders"])
+                
+                st.write(f"Ringkasan: {order_summary}")
+                
+                # 3. Ambil escrow data untuk dana yang sudah release
+                # Coba dengan rentang yang sama
+                escrow_data = api.get_escrow_list(start_ts, end_ts, page_no=0)
                 escrow_summary = process_escrow_data(escrow_data)
                 
-                payout_data = api.get_payout_detail(start_day_ts, end_day_ts, page_no=0)
+                st.write(f"Escrow: {escrow_summary}")
+                
+                # 4. Ambil payout
+                payout_data = api.get_payout_detail(start_ts, end_ts, page_no=0)
                 payout_summary = process_payout_data(payout_data)
+                
+                st.write(f"Payout: {payout_summary}")
             
             # Simpan ke database
             with st.spinner("Menyimpan ke database..."):
                 db = DatabaseManager(init_supabase())
-                
-                # Simpan sebagai data tanggal yang dipilih
                 save_datetime = datetime.combine(save_date, datetime.min.time())
                 
-                # Simpan income (dana released belum tarik)
-                income_to_save = {
-                    "total_amount": income_summary.get("total_pending_withdrawal", 0),
-                    "total_released": income_summary.get("total_released", 0),
-                    "transaction_count": income_summary.get("transaction_count", 0),
-                    "details": income_summary.get("details", [])
-                }
-                db.save_income_data(selected_shop["shop_id"], save_datetime, income_to_save)
+                # Simpan sebagai snapshot tanggal hari ini
+                db.save_pending_data(selected_shop["shop_id"], save_datetime, {
+                    "total_amount": order_summary["pending"],
+                    "order_count": order_summary["pending_count"],
+                    "details": order_summary["pending_orders"][:100]  # Limit 100
+                })
                 
-                # Simpan pending orders
-                pending_to_save = {
-                    "total_amount": pending_summary.get("total_pending_amount", 0),
-                    "order_count": pending_summary.get("order_count", 0),
-                    "details": pending_summary.get("details", [])
-                }
-                db.save_pending_data(selected_shop["shop_id"], save_datetime, pending_to_save)
-                
-                # Simpan juga escrow & payout untuk referensi
                 db.save_escrow_data(selected_shop["shop_id"], save_datetime, escrow_summary)
                 db.save_payout_data(selected_shop["shop_id"], save_datetime, payout_summary)
             
-            st.success(f"✅ Data untuk tanggal {save_date.strftime('%d %B %Y')} berhasil disimpan!")
+            # Tampilkan hasil
+            st.success(f"✅ Data untuk {save_date.strftime('%d %B %Y')} berhasil disimpan!")
             
-            # Tampilkan ringkasan
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Dana Released (Belum Tarik)", f"Rp {income_summary['total_pending_withdrawal']:,.0f}")
+                st.metric("Total Order", f"{order_summary['order_count']}")
             with col2:
-                st.metric("Dana Pending (Order Aktif)", f"Rp {pending_summary['total_pending_amount']:,.0f}")
+                st.metric("Dana Pending", f"Rp {order_summary['pending']:,.0f}", f"{order_summary['pending_count']} order")
             with col3:
-                st.metric("Total Escrow", f"Rp {escrow_summary['total_amount']:,.0f}")
+                st.metric("Dana Completed", f"Rp {order_summary['completed']:,.0f}")
+            with col4:
+                st.metric("Dana Escrow", f"Rp {escrow_summary['total_amount']:,.0f}")
         
         st.divider()
-        st.subheader("📊 Lihat Historical Data (3 Bulan Terakhir)")
+        st.subheader("📊 Lihat Historical Data (Jan-Mar 2026)")
         
         if st.button("📈 Tampilkan Data Tersimpan", use_container_width=True):
-            # Ambil data dari database untuk 3 bulan terakhir
+            # Ambil data dari 1 Jan 2026 sampai hari ini
+            start_date = datetime(2026, 1, 1)
             end_date = datetime.now()
-            start_date = end_date - timedelta(days=90)
             
-            income_hist = db.get_income_history(selected_shop["shop_id"], start_date, end_date)
             pending_hist = db.get_pending_history(selected_shop["shop_id"], start_date, end_date)
+            escrow_hist = db.get_escrow_history(selected_shop["shop_id"], start_date, end_date)
             
-            if not income_hist and not pending_hist:
+            if not pending_hist and not escrow_hist:
                 st.warning("Belum ada data tersimpan. Silakan simpan data terlebih dahulu.")
             else:
-                # Merge data untuk display
+                # Buat DataFrame dengan kolom yang diminta
                 historical_data = []
                 
-                # Buat dict berdasarkan tanggal
-                income_by_date = {item['date']: item for item in income_hist}
-                pending_by_date = {item['date']: item for item in pending_hist}
+                # Group by date
+                from collections import defaultdict
+                by_date = defaultdict(lambda: {"pending": 0, "escrow": 0})
                 
-                all_dates = set(income_by_date.keys()) | set(pending_by_date.keys())
+                for item in pending_hist:
+                    date_key = item['date'][:10]  # YYYY-MM-DD
+                    by_date[date_key]["pending"] = item.get('total_pending_amount', 0) or item.get('total_amount', 0)
                 
-                for date_str in sorted(all_dates):
-                    income_item = income_by_date.get(date_str, {})
-                    pending_item = pending_by_date.get(date_str, {})
-                    
+                for item in escrow_hist:
+                    date_key = item['date'][:10]
+                    by_date[date_key]["escrow"] = item.get('total_escrow_amount', 0)
+                
+                # Convert ke list
+                for date_str in sorted(by_date.keys()):
+                    data = by_date[date_str]
                     historical_data.append({
                         "Tanggal": date_str,
-                        "Dana Belum Ditarik (Rp)": income_item.get('total_pending_withdrawal', 0) or income_item.get('total_amount', 0),
-                        "Dana Pending (Rp)": pending_item.get('total_pending_amount', 0) or pending_item.get('total_amount', 0),
-                        "Transaksi": income_item.get('transaction_count', 0),
-                        "Orders Pending": pending_item.get('order_count', 0)
+                        "Dana Belum Ditarik (Escrow)": data["escrow"],
+                        "Dana Pending (Order)": data["pending"]
                     })
                 
                 df_hist = pd.DataFrame(historical_data)
+                
+                st.write("### 📋 Tabel Historical")
                 st.dataframe(df_hist, use_container_width=True)
                 
-                # Chart
-                st.line_chart(df_hist.set_index('Tanggal')[['Dana Belum Ditarik (Rp)', 'Dana Pending (Rp)']])
+                st.write("### 📈 Grafik Trend")
+                if len(df_hist) > 0:
+                    st.line_chart(df_hist.set_index('Tanggal')[['Dana Belum Ditarik (Escrow)', 'Dana Pending (Order)']])
                 
                 # Download Excel
                 excel_file = to_excel_download({
@@ -928,7 +1043,7 @@ def render_dashboard_tab():
                 st.download_button(
                     "📥 Download Excel",
                     excel_file,
-                    f"historical_dana_{selected_shop['shop_name']}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    f"historical_dana_{selected_shop['shop_name']}_Jan-Mar-2026.xlsx",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
     
