@@ -279,15 +279,23 @@ def fetch_historical_data(api: ShopeeAPI, start_date: datetime, end_date: dateti
             income_released = 0
             income_pending = 0
             
+            # if income_data and "response" in income_data:
+            #     income_list = income_data["response"].get("income_list", [])
+            #     for item in income_list:
+            #         released = item.get("released_amount", 0) or 0
+            #         # Jika sudah payout, tidak masuk ke "belum ditarik"
+            #         if item.get("actual_payout_time"):
+            #             pass  # Sudah ditarik
+            #         else:
+            #             income_released += released
+            #         income_pending += item.get("pending_amount", 0) or 0
             if income_data and "response" in income_data:
                 income_list = income_data["response"].get("income_list", [])
                 for item in income_list:
                     released = item.get("released_amount", 0) or 0
-                    # Jika sudah payout, tidak masuk ke "belum ditarik"
-                    if item.get("actual_payout_time"):
-                        pass  # Sudah ditarik
-                    else:
-                        income_released += released
+                    # Ambil semua dana yang dilepas pada tanggal tersebut 
+                    # tanpa memperdulikan apakah sekarang sudah ditarik (payout) atau belum
+                    income_released += released
                     income_pending += item.get("pending_amount", 0) or 0
             
             # 2. Ambil order list untuk hari ini
@@ -301,38 +309,64 @@ def fetch_historical_data(api: ShopeeAPI, start_date: datetime, end_date: dateti
             
             if orders_data and "response" in orders_data:
                 order_list = orders_data["response"].get("order_list", [])
-                pending_status = ["UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "TO_SHIP"]
+                # pending_status = ["UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED", "TO_CONFIRM_RECEIVE", "TO_SHIP"]
+                
+                # for order in order_list:
+                #     # Cek apakah order dibuat pada tanggal ini atau sebelumnya tapi masih pending
+                #     order_time = order.get("create_time", 0)
+                #     if order_time <= day_end:
+                #         status = order.get("order_status", "")
+                #         if status in pending_status:
+                #             # Hitung amount
+                #             amount = (
+                #                 order.get("total_amount") or 
+                #                 order.get("escrow_amount") or
+                #                 order.get("buyer_paid_amount", 0)
+                #             )
+                #             order_pending += amount or 0
+                #             order_count += 1
+            
+                valid_status = ["COMPLETED", "SHIPPED", "TO_CONFIRM_RECEIVE", "READY_TO_SHIP"]
                 
                 for order in order_list:
-                    # Cek apakah order dibuat pada tanggal ini atau sebelumnya tapi masih pending
                     order_time = order.get("create_time", 0)
                     if order_time <= day_end:
                         status = order.get("order_status", "")
-                        if status in pending_status:
-                            # Hitung amount
-                            amount = (
-                                order.get("total_amount") or 
-                                order.get("escrow_amount") or
-                                order.get("buyer_paid_amount", 0)
-                            )
-                            order_pending += amount or 0
+                        if status in valid_status:
+                            # Gunakan total_amount untuk melihat nilai transaksi awal
+                            amount = order.get("total_amount", 0) or order.get("buyer_paid_amount", 0)
+                            order_pending += amount
                             order_count += 1
             
             # 3. Ambil escrow list untuk hari ini
+            # escrow_total = 0
+            # escrow_data = api.get_escrow_list(day_start, day_end, page_no=0)
+            
+            # if escrow_data and "response" in escrow_data:
+            #     escrow_list = escrow_data["response"].get("escrow_list", [])
+            #     # Ambil detail untuk 10 order pertama untuk hitung total
+            #     for escrow in escrow_list[:10]:
+            #         order_sn = escrow.get("order_sn")
+            #         if order_sn:
+            #             detail = api.get_escrow_detail(order_sn)
+            #             if detail and "response" in detail:
+            #                 order_income = detail["response"].get("order_income", {})
+            #                 escrow_amount = order_income.get("escrow_amount", 0)
+            #                 escrow_total += escrow_amount or 0
             escrow_total = 0
             escrow_data = api.get_escrow_list(day_start, day_end, page_no=0)
             
             if escrow_data and "response" in escrow_data:
                 escrow_list = escrow_data["response"].get("escrow_list", [])
-                # Ambil detail untuk 10 order pertama untuk hitung total
-                for escrow in escrow_list[:10]:
+                for escrow in escrow_list:
                     order_sn = escrow.get("order_sn")
                     if order_sn:
                         detail = api.get_escrow_detail(order_sn)
                         if detail and "response" in detail:
                             order_income = detail["response"].get("order_income", {})
-                            escrow_amount = order_income.get("escrow_amount", 0)
-                            escrow_total += escrow_amount or 0
+                            # Escrow amount di sini adalah total dana yang masuk ke saldo penjual
+                            amt = order_income.get("escrow_amount", 0) or 0
+                            escrow_total += amt
             
             # Simpan hasil
             result = {
